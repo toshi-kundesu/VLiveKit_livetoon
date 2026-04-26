@@ -1,0 +1,68 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &7818684617943450443
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3463782847719453912}
+  - component: {fileID: 677833137515770136}
+  - component: {fileID: 870298165854683324}
+  m_Layer: 0
+  m_Name: ShaderSettings
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3463782847719453912
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7818684617943450443}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &677833137515770136
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7818684617943450443}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7f133d2e3be6d98498985ee917c89de1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _AntiPerspectiveIntensity: 0
+  _LightIntensityMultiplier: 0.17
+  _SphereNormalIntensity: 0.363
+--- !u!114 &870298165854683324
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 7818684617943450443}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 03b7789b6c4ae58438177aafb6348f6f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  headPosition: {x: -0.0000000012240002, y: 1.378607, z: -0.0094720125}
+  _TopColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  _BottomColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
+  _HorizonOrigin: 0
+  _GradiantSpread: 0.1
+  targetHeadPosition: {fileID: 0}
