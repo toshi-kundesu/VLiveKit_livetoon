@@ -785,6 +785,16 @@ Tags{"LightMode"="ForwardOnly"}
 
 			#pragma vertex LitPassVertex
             #pragma fragment frag_forward
+
+            // HDRP shadow filter algorithm fallback
+            #ifndef SHADOW_LOW
+                #ifndef SHADOW_MEDIUM
+                    #ifndef SHADOW_HIGH
+                        #define SHADOW_LOW
+                    #endif
+                #endif
+            #endif
+
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Material.hlsl"
             #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/Lighting.hlsl"
 
@@ -837,7 +847,7 @@ Tags{"LightMode"="SRPDefaultUnlit"}
 
             HLSLPROGRAM
 
-#pragma shader_feature _ MTOON_DEBUG_NORMAL MTOON_DEBUG_LITSHADERATE
+            #pragma shader_feature _ MTOON_DEBUG_NORMAL MTOON_DEBUG_LITSHADERATE
             #pragma multi_compile _ MTOON_OUTLINE_WIDTH_WORLD MTOON_OUTLINE_WIDTH_SCREEN
             #pragma multi_compile _ MTOON_OUTLINE_COLOR_FIXED MTOON_OUTLINE_COLOR_MIXED
             #pragma multi_compile _ _NORMALMAP
@@ -845,6 +855,16 @@ Tags{"LightMode"="SRPDefaultUnlit"}
             #define MTOON_CLIP_IF_OUTLINE_IS_NONE
             #pragma vertex LitPassVertex_Outline
             #pragma fragment frag_forward
+
+            // HDRP shadow filter algorithm fallback
+            // HDRP 14.x の HDShadowAlgorithms.hlsl は SHADOW_LOW / MEDIUM / HIGH を要求する
+            #ifndef SHADOW_LOW
+                #ifndef SHADOW_MEDIUM
+                    #ifndef SHADOW_HIGH
+                        #define SHADOW_LOW
+                    #endif
+                #endif
+            #endif
 
 
 	        #pragma multi_compile_fragment PUNCTUAL_SHADOW_LOW PUNCTUAL_SHADOW_MEDIUM PUNCTUAL_SHADOW_HIGH
