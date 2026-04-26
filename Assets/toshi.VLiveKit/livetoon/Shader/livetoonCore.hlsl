@@ -231,7 +231,9 @@ float outlineTex = SAMPLE_TEXTURE2D_LOD(_OutlineWidthTexture, sampler_OutlineWid
     float4 nearUpperRight = mul(UNITY_MATRIX_P, float4(1, 1, UNITY_NEAR_CLIP_VALUE, _ProjectionParams.y));
     float aspect = abs(nearUpperRight.y / nearUpperRight.x);
     float4 vertex = TransformObjectToHClip(v.vertex);
-    float3 viewNormal = mul((float3x3)UNITY_MATRIX_IT_MV, v.normal.xyz);
+    // 修正: Built-in依存 → HDRP対応
+    float3 normalWS = TransformObjectToWorldNormal(v.normal.xyz);
+    float3 viewNormal = TransformWorldToViewDir(normalWS);
     // float3 clipNormal = TransformViewToProjection(viewNormal.xyz);
     float3 clipNormal = mul(UNITY_MATRIX_P, float4(viewNormal, 0));
     float2 projectedNormal = normalize(clipNormal.xy);
