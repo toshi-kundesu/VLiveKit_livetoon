@@ -1,8 +1,3 @@
 *.tgz
-Shader/*.shadergraph
-Shader/*.shadergraph.meta
-Shader/Shader Graphs_livetoon_shadergraph.mat
-Shader/Shader Graphs_livetoon_shadergraph.mat.meta
-Test/
-Test.meta
+.codex-npm-cache/
 
