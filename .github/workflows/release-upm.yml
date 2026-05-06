@@ -67,15 +67,15 @@ jobs:
             local asset_path="$1"
             local guid
             guid="$(node -e 'const crypto = require("crypto"); console.log(crypto.createHash("md5").update(process.argv[1]).digest("hex"));' "$package_name:$asset_path")"
-            cat > "$PACKAGE_WORKDIR/$asset_path.meta" <<EOF
-          fileFormatVersion: 2
-          guid: $guid
-          DefaultImporter:
-            externalObjects: {}
-            userData:
-            assetBundleName:
-            assetBundleVariant:
-          EOF
+            {
+              printf 'fileFormatVersion: 2\n'
+              printf 'guid: %s\n' "$guid"
+              printf 'DefaultImporter:\n'
+              printf '  externalObjects: {}\n'
+              printf '  userData:\n'
+              printf '  assetBundleName:\n'
+              printf '  assetBundleVariant:\n'
+            } > "$PACKAGE_WORKDIR/$asset_path.meta"
           }
 
           if [[ -f README.md ]]; then
