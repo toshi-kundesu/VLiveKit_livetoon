@@ -1,53 +1,13 @@
-## 概要
+# VLive Live Toon
 
-VLiveKitの一部として開発している、  
-ライブ制作向けキャラクターシェーダーです。
+ライブ制作向けの toon shader / character look を扱う Unity package です。
 
-実際のライブ制作で使用しながら改善しているもので、  
-現在は整理およびリファクタリングを進めています。
+この repository は VLiveKit sandbox から submodule として利用する Unity package です。
 
----
+- Package name: `com.toshi.vlivekit.livetoon`
+- Package root: `Assets/toshi.VLiveKit/livetoon`
+- Repository: https://github.com/toshi-kundesu/VLiveKit_LiveToon
 
-## 実装済み機能（整理中）
+詳しい内容と導入方法は package root の README を確認してください。
 
-- 法線の球面化によるライティングの安定化
-- lit / shade 境界の彩度制御による表面下散乱風表現
-- 視野角依存の見え方を補正するジオメトリシェーディング
-- 前髪の落ち影を整えるためのカスタムライト
-- HDRP対応（HDRP向けToonシェーダーとして動作）
-
----
-
-## 特徴
-
-- 複数ライト環境でもルックが崩れにくい設計
-- ライブ用途を前提とした安定した描画
-
-他のポストプロセスと組み合わせることで表現の幅が広がります：
-
-- Diffusion
-- キャラクターブルーム
-- 原神ライクなポストプロセス
-
-（※ これらは別パッケージに含まれます）
-
----
-
-## 今後の予定
-
-- 汗などのライブ向け表現の追加
-- キャラクター表現の拡張
-- 全体的なリファクタリング
-
----
-
-## インストール
-
-`Packages/manifest.json` の `dependencies` に以下を追加してください。
-
-```json
-{
-  "dependencies": {
-    "com.toshi.vlivekit.livetoon": "https://github.com/toshi-kundesu/VLiveKit_livetoon.git?path=/Assets/toshi.VLiveKit/livetoon#main"
-  }
-}
+- `Assets/toshi.VLiveKit/livetoon/README.md`
