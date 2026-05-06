@@ -1,4 +1,4 @@
-name: Release UPM Package
+﻿name: Release UPM Package
 
 on:
   push:
@@ -61,35 +61,39 @@ jobs:
           mkdir -p "$PACKAGE_WORKDIR"
           cp -a "$PACKAGE_ROOT"/. "$PACKAGE_WORKDIR"/
 
-          if [[ -f README.md ]]; then
-            cp README.md "$PACKAGE_WORKDIR/README.md"
-            cat > "$PACKAGE_WORKDIR/README.md.meta" <<'EOF'
+          package_name="$(node -e 'const fs = require("fs"); const path = process.env.PACKAGE_WORKDIR + "/package.json"; console.log(JSON.parse(fs.readFileSync(path, "utf8")).name);')"
+
+          write_meta() {
+            local asset_path="$1"
+            local guid
+            guid="$(node -e 'const crypto = require("crypto"); console.log(crypto.createHash("md5").update(process.argv[1]).digest("hex"));' "$package_name:$asset_path")"
+            cat > "$PACKAGE_WORKDIR/$asset_path.meta" <<EOF
           fileFormatVersion: 2
-          guid: 61f1b63d2b074d6ba8a0c026b03f36e0
+          guid: $guid
           DefaultImporter:
             externalObjects: {}
             userData:
             assetBundleName:
             assetBundleVariant:
           EOF
+          }
+
+          if [[ -f README.md ]]; then
+            cp README.md "$PACKAGE_WORKDIR/README.md"
+            write_meta README.md
           fi
 
           if [[ -f LICENSE ]]; then
             cp LICENSE "$PACKAGE_WORKDIR/LICENSE"
-            cat > "$PACKAGE_WORKDIR/LICENSE.meta" <<'EOF'
-          fileFormatVersion: 2
-          guid: 9a7cdb7dd2434d3f8ca30a31a90cb0de
-          DefaultImporter:
-            externalObjects: {}
-            userData:
-            assetBundleName:
-            assetBundleVariant:
-          EOF
+            write_meta LICENSE
           fi
 
           if [[ -d "$PACKAGE_WORKDIR/Samples" ]]; then
             rm -rf "$PACKAGE_WORKDIR/Samples~"
             mv "$PACKAGE_WORKDIR/Samples" "$PACKAGE_WORKDIR/Samples~"
+            if [[ -f "$PACKAGE_WORKDIR/Samples.meta" ]]; then
+              mv "$PACKAGE_WORKDIR/Samples.meta" "$PACKAGE_WORKDIR/Samples~.meta"
+            fi
           fi
 
           node -e '
