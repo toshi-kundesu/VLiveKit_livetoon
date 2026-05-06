@@ -13,8 +13,7 @@
 // #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/Shadow/HDShadowContext.hlsl"
 // #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/LightDefinition.cs.hlsl"
 
-#pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS;
-#pragma multi_compile _ _PUNCTUAL_FILTER_ALGORITHM;
+#pragma multi_compile _ _ADDITIONAL_LIGHT_SHADOWS
 
 
 
