@@ -1,6 +1,6 @@
 ﻿{
     "name":  "com.toshi.vlivekit.livetoon",
-    "version":  "0.1.0",
+    "version":  "0.1.1",
     "displayName":  "VLive Live Toon",
     "description":  "Live toon for virtual live production.",
     "unity":  "2022.3",
@@ -11,5 +11,12 @@
                        "type":  "git",
                        "url":  "git+https://github.com/toshi-kundesu/VLiveKit_LiveToon.git"
                    },
-    "license":  "Unlicense"
+    "license":  "Unlicense",
+    "samples":  [
+                    {
+                        "displayName":  "Empty Scene",
+                        "description":  "A blank scene for starting a VLive Live Toon setup.",
+                        "path":  "Samples~/Empty Scene"
+                    }
+                ]
 }

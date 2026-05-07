@@ -6,7 +6,7 @@ public class ShaderConverterTool : EditorWindow
     private GameObject selectedObject;
     private Shader shaderToUse;
 
-    [MenuItem("toshi/VLiveKit/Shader Converter Tool")]
+    [MenuItem("toshi/VLiveKit/LiveToon/Shader Converter")]
     public static void ShowWindow()
     {
         GetWindow<ShaderConverterTool>("Shader Converter");
