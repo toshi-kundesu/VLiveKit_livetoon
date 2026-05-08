@@ -1,9 +1,9 @@
-﻿{
+{
     "name":  "com.toshi.vlivekit.livetoon",
-    "version":  "0.1.1",
+    "version": "0.1.2",
     "displayName":  "VLive Live Toon",
     "description":  "Live toon for virtual live production.",
-    "unity":  "2022.3",
+    "unity": "6000.3",
     "author":  {
                    "name":  "toshi"
                },
