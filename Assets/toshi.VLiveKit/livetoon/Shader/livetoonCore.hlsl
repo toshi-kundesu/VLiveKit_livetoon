@@ -602,8 +602,6 @@ rim_test = step(0.5, rim_test) * directionalLightData.color * GetCurrentExposure
 // ライトのdiffuseドット積を0-1正規化したものをかける
 float rim_dot = saturate(dot(L, worldNormal));
 rim_test *= rim_dot;
-rimColor = float3(0,0,0);
-rimColor += rim_test * _RimColor.rgb * SAMPLE_TEXTURE2D(_RimTexture, sampler_RimTexture, i.uv0).rgb;
 // directionalLightColor += rim_test * _RimColor.rgb * SAMPLE_TEXTURE2D(_RimTexture, sampler_RimTexture, i.uv0).rgb;
 
 
@@ -896,6 +894,7 @@ specCol *= specNdL;
     col = min(col, lit); // comment out if you want to PBR absolutely.
 #endif
 // parametric rim lighting
+    rimColor = float3(0,0,0);
 #ifdef MTOON_FORWARD_ADD
     half3 staticRimLighting = 0;
     half3 mixedRimLighting = lighting;
@@ -1344,7 +1343,7 @@ float4 frag_forward(v2f i) : SV_TARGET
 float alpha = RTD_TRAN_OPA_Sli;
     float4 result = (float4)0.0;
     // 関数化する
-    float3 rimColor = float3(0,0,0);
+    float3 mtoonRimColor = float3(0,0,0);
     // シンプルなリムライト
     // rimpowerを高めにする
     float rimPower = _RimFresnelPower;
@@ -1353,14 +1352,16 @@ float alpha = RTD_TRAN_OPA_Sli;
     rimLift = 0.4;
     float3 rim_test_simple = pow(saturate(1.0 - dot(i.normalWS, normalize(i.viewDirWS)) + rimLift), max(rimPower, EPS_COL));
     float3 rimColor_mask = rim_test_simple;
-    float3 specCol = float3(0,0,0);
     if (_DirectionalLightCount > 0)
     {
         for (int j = 0; j < _DirectionalLightCount; j++)
         {
             DirectionalLightData directionalLightData = _DirectionalLightDatas[j];
+            float3 directionalRimColor = float3(0,0,0);
+            float3 directionalSpecCol = float3(0,0,0);
             
-            result += CalculateDirectionalLighting(i, directionalLightData, true, rimColor, specCol);
+            result += CalculateDirectionalLighting(i, directionalLightData, true, directionalRimColor, directionalSpecCol);
+            mtoonRimColor += directionalRimColor;
         }
     }
     else if (_FallbackLightIntensity > 0)
@@ -1370,7 +1371,10 @@ float alpha = RTD_TRAN_OPA_Sli;
         fallbackDirectionalLightData.forward = -fallbackLightDir;
         fallbackDirectionalLightData.color = _FallbackLightColor.rgb * (_FallbackLightIntensity * 10.0);
         fallbackDirectionalLightData.shadowIndex = -1;
-        result += CalculateDirectionalLighting(i, fallbackDirectionalLightData, false, rimColor, specCol);
+        float3 fallbackRimColor = float3(0,0,0);
+        float3 fallbackSpecCol = float3(0,0,0);
+        result += CalculateDirectionalLighting(i, fallbackDirectionalLightData, false, fallbackRimColor, fallbackSpecCol);
+        mtoonRimColor += fallbackRimColor;
     }
     float3 punctualLightColorResult = float3(0,0,0);
     // result = float4(0,0,0,0);
@@ -1396,6 +1400,7 @@ float alpha = RTD_TRAN_OPA_Sli;
     else {
         // nothing to do
     }
+    result.rgb += mtoonRimColor * _MToonRimIntensity;
     result.rgb += punctualLightColorResult * rimColor_mask * _PunctualLightIntensity * mainTex.rgb;
     // result.rgb += rimColor * punctualDiffuse;
     // result.rgb += specCol * punctualDiffuse;

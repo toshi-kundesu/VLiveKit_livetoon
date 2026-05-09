@@ -90,6 +90,12 @@ Point, spot, and other HDRP punctual lights are added as a secondary rim-like ac
 
 Tune `_PunctualLightIntensity` on the material when a scene needs stronger or weaker local-light response. Start near `1` for normal stage fixtures and lower it when point or spot lights are used close to the character.
 
+## MToon Rim
+
+LiveToon keeps the stage-style punctual rim separate from the original MToon rim controls. The MToon rim path uses `_RimColor`, `_RimTexture`, `_RimLightingMix`, `_RimFresnelPower`, and `_RimLift`, then applies `_MToonRimIntensity` before adding it to the final color.
+
+Use `_MToonRimIntensity` to balance the original MToon rim against LiveToon's custom local-light rim. Materials with black `_RimColor` remain unchanged.
+
 ---
 
 ## LiveToon Legacy Snapshot

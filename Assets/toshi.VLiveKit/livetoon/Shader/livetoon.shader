@@ -30,6 +30,7 @@ Shader "toshi/VLiveKit/livetoon"
         _RimLightingMix ("Rim Lighting Mix", Range(0, 1)) = 0
         [PowerSlider(4.0)] _RimFresnelPower ("Rim Fresnel Power", Range(0, 100)) = 1
         _RimLift ("Rim Lift", Range(0, 1)) = 0
+        _MToonRimIntensity ("MToon Rim Intensity", Range(0, 2)) = 1
         [NoScaleOffset] _SphereAdd ("Sphere Texture(Add)", 2D) = "black" {}
         [HDR] _EmissionColor ("Color", Color) = (0,0,0)
         [NoScaleOffset] _EmissionMap ("Emission", 2D) = "white" {}
@@ -162,6 +163,7 @@ uniform float4 _RimTexture_ST;
 uniform float _RimLightingMix;
 uniform float _RimFresnelPower;
 uniform float _RimLift;
+uniform float _MToonRimIntensity;
 uniform float4 _SphereAdd_ST;
 
 uniform float4 _EmissionColor;
