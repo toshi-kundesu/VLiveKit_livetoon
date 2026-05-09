@@ -84,6 +84,12 @@ LiveToon uses HDRP Directional Lights as the main toon key light so scene shadow
 
 The fallback only runs when `_DirectionalLightCount` is zero. Scene Directional Lights still use normal HDRP shadow attenuation, while the fallback skips scene shadow sampling. Tune `_FallbackLightIntensity` and `_FallbackLightColor` on the material when a lightless preview or stage setup needs a different default brightness.
 
+## Punctual Light Intensity
+
+Point, spot, and other HDRP punctual lights are added as a secondary rim-like accent instead of replacing the Directional Light key. LiveToon keeps the Directional Light path unchanged and scales punctual lights down before applying them, so local fixtures do not blow out VRM materials by default.
+
+Tune `_PunctualLightIntensity` on the material when a scene needs stronger or weaker local-light response. Start near `1` for normal stage fixtures and lower it when point or spot lights are used close to the character.
+
 ---
 
 ## LiveToon Legacy Snapshot

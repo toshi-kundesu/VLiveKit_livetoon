@@ -1124,7 +1124,7 @@ lightDir *= -1;
 
 
 
-punctualLightColor += punctualLightData.color * GetCurrentExposureMultiplier();
+punctualLightColor += punctualLightData.color * GetCurrentExposureMultiplier() / 10;
 
 lightColor = directionalLightColor + punctualLightColor;
 // T
@@ -1352,7 +1352,7 @@ float alpha = RTD_TRAN_OPA_Sli;
     float rimLift = _RimLift;
     rimLift = 0.4;
     float3 rim_test_simple = pow(saturate(1.0 - dot(i.normalWS, normalize(i.viewDirWS)) + rimLift), max(rimPower, EPS_COL));
-    float3 rimColor_mask = rim_test_simple * GetCurrentExposureMultiplier();
+    float3 rimColor_mask = rim_test_simple;
     float3 specCol = float3(0,0,0);
     if (_DirectionalLightCount > 0)
     {
@@ -1396,7 +1396,7 @@ float alpha = RTD_TRAN_OPA_Sli;
     else {
         // nothing to do
     }
-    result.rgb += punctualLightColorResult * rimColor_mask * 1000 * mainTex.rgb;
+    result.rgb += punctualLightColorResult * rimColor_mask * _PunctualLightIntensity * mainTex.rgb;
     // result.rgb += rimColor * punctualDiffuse;
     // result.rgb += specCol * punctualDiffuse;
     // result.rgb += punctualDiffuse;

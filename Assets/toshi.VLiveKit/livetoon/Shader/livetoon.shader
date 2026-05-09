@@ -22,6 +22,7 @@ Shader "toshi/VLiveKit/livetoon"
         _ShadeToony ("Shade Toony", Range(0, 1)) = 0.9
         _LightColorAttenuation ("Light Color Attenuation", Range(0, 1)) = 0
         _IndirectLightIntensity ("Indirect Light Intensity", Range(0, 1)) = 0.1
+        _PunctualLightIntensity ("Punctual Light Intensity", Range(0, 2)) = 1
         _FallbackLightIntensity ("Fallback Light Intensity", Range(0, 2)) = 1
         [HDR] _FallbackLightColor ("Fallback Light Color", Color) = (1,1,1,1)
         [HDR] _RimColor ("Rim Color", Color) = (0,0,0)
@@ -152,6 +153,7 @@ uniform float _ShadeShift;
 uniform float _ShadeToony;
 uniform float _LightColorAttenuation;
 uniform float _IndirectLightIntensity;
+uniform float _PunctualLightIntensity;
 uniform float _FallbackLightIntensity;
 uniform float4 _FallbackLightColor;
 
