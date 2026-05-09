@@ -1,0 +1,18 @@
+{
+  "name": "toshi.VLiveKit.livetoon_legacy.Editor",
+  "rootNamespace": "toshi.VLiveKit.livetoon_legacy.Editor",
+  "references": [
+    "toshi.VLiveKit.livetoon_legacy"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

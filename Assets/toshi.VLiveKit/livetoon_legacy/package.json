@@ -1,0 +1,15 @@
+{
+  "name": "com.toshi.vlivekit.livetoon-legacy",
+  "version": "0.0.8",
+  "displayName": "VLive Live Toon Legacy",
+  "description": "Live toon for virtual live production.",
+  "unity": "2022.3",
+  "author": {
+    "name": "toshi"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toshi-kundesu/VLiveKit_LiveToon.git"
+  },
+  "license": "Unlicense"
+}

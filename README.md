@@ -75,3 +75,11 @@ The converter currently uses a LoadModel-style baseline for VRM 0.x / MToon mate
 - restores selected model materials from those backups with `Restore Materials From Backups`
 
 Backups are stored in a `LiveToonMaterialBackups` folder next to the source material asset. The converter keeps the first backup instead of overwriting it, so you can compare and restore the original VRM 0.x material values while debugging culling and double-sided rendering.
+
+---
+
+## LiveToon Legacy Snapshot
+
+`Assets/toshi.VLiveKit/livetoon_legacy` keeps a side-by-side snapshot of `Assets/toshi.VLiveKit/livetoon` from commit `411131ffd64863e66531960cf47656823bd3b932`.
+
+Use it as a reference for the older LoadModel-style VRM 0.x / MToon conversion behavior. Unity GUIDs, shader paths, package name, asmdef names, and the legacy converter menu path are renamed so the snapshot can live next to the current LiveToon sources without colliding.

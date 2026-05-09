@@ -1,0 +1,5 @@
+#define MYFUNCTION_INCLUDED
+#ifdef MYFUNCTION_INCLUDED
+{
+}
+#endif
