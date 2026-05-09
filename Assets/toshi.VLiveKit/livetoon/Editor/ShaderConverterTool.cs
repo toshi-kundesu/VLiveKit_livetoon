@@ -1,230 +1,415 @@
-using UnityEngine;
+using System;
+using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
+using UnityEngine;
 
-public class ShaderConverterTool : EditorWindow
+namespace VLiveKit.LiveToon.Editor
 {
-    private GameObject selectedObject;
-    private Shader shaderToUse;
-
-    [MenuItem("Tools/Shader Converter Tool")]
-    public static void ShowWindow()
+    public sealed class ShaderConverterTool : EditorWindow
     {
-        GetWindow<ShaderConverterTool>("Shader Converter");
-    }
+        private const string DefaultShaderName = "toshi/VLiveKit/livetoon";
+        private const string BackupDirectoryName = "LiveToonMaterialBackups";
+        private const string BackupSuffix = "_LiveToonBackup";
 
-    void OnGUI()
-    {
-        GUILayout.Label("Base Settings", EditorStyles.boldLabel);
-        selectedObject = (GameObject)EditorGUILayout.ObjectField("Selected Object", selectedObject, typeof(GameObject), true);
-        shaderToUse = (Shader)EditorGUILayout.ObjectField("Shader to Use", shaderToUse, typeof(Shader), false);
+        private GameObject selectedObject;
+        private Shader shaderToUse;
+        private bool createMaterialBackups = true;
+        private bool skipConvertedMaterials = true;
+        private bool disableOutlineOnConvert = true;
 
-        if (GUILayout.Button("Convert Shaders"))
+        [MenuItem("toshi/VLiveKit/LiveToon/Shader Converter")]
+        public static void ShowWindow()
         {
-            ConvertShadersForSelectedModel();
-        }
-    }
-
-    private void ConvertShadersForSelectedModel()
-    {
-        if (selectedObject == null)
-        {
-            Debug.LogError("No object selected. Please select a model first.");
-            return;
+            GetWindow<ShaderConverterTool>("LiveToon Shader Converter");
         }
 
-        Renderer[] renderers = selectedObject.GetComponentsInChildren<Renderer>();
-        int testInt = 0;
-
-        foreach (var renderer in renderers)
+        private void OnEnable()
         {
-            foreach (var material in renderer.sharedMaterials)
+            if (shaderToUse == null)
             {
-                #region change shader
-                if (material == null) continue;
+                shaderToUse = Shader.Find(DefaultShaderName);
+            }
+        }
 
-                // materialのshaderの名前がshaderToUseの名前と一致していたら処理をスキップ
-                if (material.shader.name == shaderToUse.name)
+        private void OnGUI()
+        {
+            EditorGUILayout.LabelField("Base Settings", EditorStyles.boldLabel);
+            selectedObject = (GameObject)EditorGUILayout.ObjectField("Selected Object", selectedObject, typeof(GameObject), true);
+            shaderToUse = (Shader)EditorGUILayout.ObjectField("Shader To Use", shaderToUse, typeof(Shader), false);
+
+            EditorGUILayout.Space();
+            createMaterialBackups = EditorGUILayout.ToggleLeft("Create material backups before converting", createMaterialBackups);
+            skipConvertedMaterials = EditorGUILayout.ToggleLeft("Skip materials already using the target shader", skipConvertedMaterials);
+            disableOutlineOnConvert = EditorGUILayout.ToggleLeft("Disable outline while converting", disableOutlineOnConvert);
+
+            EditorGUILayout.Space();
+            using (new EditorGUI.DisabledScope(selectedObject == null || shaderToUse == null))
+            {
+                if (GUILayout.Button("Convert Shaders"))
+                {
+                    ConvertShadersForSelectedModel();
+                }
+            }
+
+            using (new EditorGUI.DisabledScope(selectedObject == null))
+            {
+                if (GUILayout.Button("Restore Materials From Backups"))
+                {
+                    RestoreMaterialsFromBackups();
+                }
+            }
+        }
+
+        private void ConvertShadersForSelectedModel()
+        {
+            if (selectedObject == null)
+            {
+                ShowNotification(new GUIContent("Select a model first."));
+                return;
+            }
+
+            if (shaderToUse == null)
+            {
+                ShowNotification(new GUIContent("Select a target shader first."));
+                return;
+            }
+
+            var convertedCount = 0;
+            var skippedCount = 0;
+            var backupCount = 0;
+            var materials = CollectUniqueMaterials(selectedObject);
+
+            foreach (var material in materials)
+            {
+                if (material == null)
                 {
                     continue;
                 }
 
-
-             
-                Debug.Log("Before:" + material.shader.name);
-      
-                // Get MToon Prperties
-                #region Get MToon Properties
-                float _tmpBlendMode = 1.0f;
-                if (material.HasProperty("_BlendMode"))
+                if (skipConvertedMaterials && material.shader == shaderToUse)
                 {
-                    _tmpBlendMode = material.GetFloat("_BlendMode");
+                    Undo.RecordObject(material, "Repair LiveToon Render Mode");
+                    ApplyRenderModeState(material, GetFloat(material, "_BlendMode", 0f));
+
+                    if (disableOutlineOnConvert)
+                    {
+                        DisableOutline(material);
+                    }
+
+                    EditorUtility.SetDirty(material);
+                    skippedCount++;
+                    continue;
                 }
-                int _tmpCullMode = 2;
-                if (material.HasProperty("_CullMode"))
+
+                if (createMaterialBackups && TryCreateMaterialBackup(material))
                 {
-                    _tmpCullMode = material.GetInt("_CullMode");
+                    backupCount++;
                 }
-                bool isAlphaTestOn = material.IsKeywordEnabled("_ALPHATEST_ON");
-                #endregion // Get MToon Properties
 
-
-                material.shader = shaderToUse;
-
-             
-                material.SetFloat("_SphereNormalIntensity", 0.1f);
-                material.SetFloat("_RimIntensity", 0.0f);
-                string renderTypeDebugText = "";
-                // }
-
-                #region Opaque
-                // shaderにtransparentという名前が含まれていなかったら、opaqueとして扱う
-                if (_tmpBlendMode == 0.0f || !material.shader.name.Contains("transparent"))
+                Undo.RecordObject(material, "Convert LiveToon Shader");
+                ConvertMaterialLikeLoadModel(material);
+                if (disableOutlineOnConvert)
                 {
-                    renderTypeDebugText = "Opaque";
-                    material.SetInt("_CullMode", _tmpCullMode);
-                    material.SetInt("_OpaqueCullMode", _tmpCullMode);
-                    material.SetInt("_CullModeForward", _tmpCullMode);
-              
-                    material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
-                    material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
-                    material.DisableKeyword("_ALPHATEST_ON"); // ok
-                    material.renderQueue = 2000; // ok
+                    DisableOutline(material);
+                }
+
+                EditorUtility.SetDirty(material);
+                convertedCount++;
+            }
+
+            AssetDatabase.SaveAssets();
+            ShowNotification(new GUIContent($"Converted {convertedCount}, skipped {skippedCount}"));
+            Debug.Log($"LiveToon shader conversion complete. Converted: {convertedCount}, skipped: {skippedCount}, backups: {backupCount}");
+        }
+
+        private void RestoreMaterialsFromBackups()
+        {
+            if (selectedObject == null)
+            {
+                ShowNotification(new GUIContent("Select a model first."));
+                return;
+            }
+
+            var restoredCount = 0;
+            var missingCount = 0;
+            var materials = CollectUniqueMaterials(selectedObject);
+
+            foreach (var material in materials)
+            {
+                var backup = FindMaterialBackup(material);
+                if (backup == null)
+                {
+                    missingCount++;
+                    continue;
+                }
+
+                Undo.RecordObject(material, "Restore LiveToon Material Backup");
+                var materialName = material.name;
+                EditorUtility.CopySerialized(backup, material);
+                material.name = materialName;
+                EditorUtility.SetDirty(material);
+                restoredCount++;
+            }
+
+            AssetDatabase.SaveAssets();
+            ShowNotification(new GUIContent($"Restored {restoredCount}, missing {missingCount}"));
+            Debug.Log($"LiveToon material backup restore complete. Restored: {restoredCount}, missing backups: {missingCount}");
+        }
+
+        private void ConvertMaterialLikeLoadModel(Material material)
+        {
+            var blendMode = GetFloat(material, "_BlendMode", 0f);
+            var color = GetColor(material, "_Color", Color.white);
+            var mainTexture = GetTexture(material, "_MainTex");
+            var shadeTexture = GetTexture(material, "_ShadeTexture");
+
+            material.shader = shaderToUse;
+
+            if (material.HasProperty("_Color"))
+            {
+                material.SetColor("_Color", color);
+            }
+
+            if (mainTexture != null && shadeTexture == null && material.HasProperty("_ShadeTexture"))
+            {
+                material.SetTexture("_ShadeTexture", mainTexture);
+            }
+
+            if (material.HasProperty("_BlendMode"))
+            {
+                material.SetFloat("_BlendMode", blendMode);
+            }
+
+            ApplyRenderModeState(material, blendMode);
+        }
+
+        private static void ApplyRenderModeState(Material material, float blendMode)
+        {
+            switch ((int)blendMode)
+            {
+                case 0:
                     material.SetOverrideTag("RenderType", "");
-                    // material.SetInt("_AlphaCutofffEnable", 0);
-                    material.SetInt("_AlphaCutofffEnable", 0); // ok
-                    material.SetInt("_AlphaDstBlend", 10); // ok
-                    material.SetInt("_DstBlend", 0);
-                    material.SetInt("_RenderQueueType", 1);
-                    material.SetInt("_SurfaceType", 0);
-                    material.SetInt("_ZTestDepthEqualForOpaque", 3);
-                    material.SetInt("_ZWrite", 1);
-                    
-                    testInt += 1;
-
-
-                        
-                }
-                #endregion
-
-                #region Cutout
-                if (_tmpBlendMode == 1.0f)
-                {
-                    renderTypeDebugText = "Cutout";
-                    testInt += 1;
-                    
-                    material.SetInt("_CullMode", _tmpCullMode);
-                    material.SetInt("_OpaqueCullMode", _tmpCullMode);
-                    material.SetInt("_CullModeForward", _tmpCullMode);
-        
-            
+                    material.DisableKeyword("_ALPHATEST_ON");
+                    material.DisableKeyword("_ALPHABLEND_ON");
                     material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
-                    material.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
-                    material.EnableKeyword("_ALPHATEST_ON"); // ok
-                    material.renderQueue = 2450; // ok
-                    material.SetOverrideTag("RenderType", "TransparentCutout"); // ok
-                    material.SetInt("_AlphaCutofffEnable", 1); // ok
-                    material.SetInt("_AlphaDstBlend", 0); // ok
-                    material.SetInt("_DstBlend", 0);
-                    material.SetInt("_RenderQueueType", 1);
-                    material.SetInt("_SurfaceType", 0);
-                    material.SetInt("_ZTestDepthEqualForOpaque", 3);
-                    material.SetInt("_ZWrite", 1);
-
-                }
-                #endregion
-
-                #region Transparent
-                if (_tmpBlendMode == 2.0f || material.shader.name.Contains("transparent"))
-                {
-                    renderTypeDebugText = "Transparent"; 
-                    testInt += 1;
-                    material.SetFloat("_CutOff", 0);
-                    material.SetOverrideTag("RenderType", "Transparent"); // ok
-                    material.SetInt("_CullMode", _tmpCullMode);
-                    material.SetInt("_OpaqueCullMode", _tmpCullMode);
-                    material.SetInt("_CullModeForward", _tmpCullMode);
-                    // material.SetInt("_CullMode", _tmpCullMode);
-                    // means alphaCutOffEnable
-                    bool utilSwitch = false;
-                    material.SetInt("_BlendMode", 0);
-                    material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT"); // ok
-                    material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT"); // ok
-                    // 分岐
-                    if (utilSwitch)
-                    {
-                        material.EnableKeyword("_ALPHATEST_ON");
-                    }
-                    else
-                    {
-                        material.DisableKeyword("_ALPHATEST_ON");
-                    }
-
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", 3f);
+                    material.renderQueue = 2225;
+                    break;
+                case 1:
+                    material.SetOverrideTag("RenderType", "TransparentCutout");
                     material.EnableKeyword("_ALPHATEST_ON");
-          
-                    material.renderQueue = 3000; // ok
-                    
-      
-                    material.SetInt("_AlphaCutofffEnable", 0); // ok
-
-                    material.SetInt("_AlphaDstBlend", 10); // ok
-                    material.SetInt("_DstBlend", 10);
-                    material.SetInt("_RenderQueueType", 4);
-                    material.SetInt("_SurfaceType", 1);
-                    material.SetInt("_ZTestDepthEqualForOpaque", 4);
-                    material.SetInt("_ZWrite", 0);
-
-                 
-
-                    
-                }
-                #endregion
-
-                if (_tmpBlendMode == 3.0f)
-                {
-                    renderTypeDebugText = "TransparentWithZWrite"; 
-                    testInt += 1;
-                    material.SetFloat("_CutOff", 0);
-                    material.SetOverrideTag("RenderType", "Transparent"); // ok
-                    material.SetInt("_CullMode", _tmpCullMode);
-                    material.SetInt("_OpaqueCullMode", _tmpCullMode);
-                    material.SetInt("_CullModeForward", _tmpCullMode);
-                    // material.SetInt("_CullMode", _tmpCullMode);
-                    // means alphaCutOffEnable
-                    bool utilSwitch = false;
-                    material.SetInt("_BlendMode", 0);
-                    material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT"); // ok
-                    material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT"); // ok
-                    // 分岐
-                    if (utilSwitch)
-                    {
-                        material.EnableKeyword("_ALPHATEST_ON");
-                    }
-                    else
-                    {
-                        material.DisableKeyword("_ALPHATEST_ON");
-                    }
-
-                    material.EnableKeyword("_ALPHATEST_ON");
-          
-                    material.renderQueue = 3000; // ok
-
-                    material.SetInt("_AlphaCutofffEnable", 0); // ok
-
-                    material.SetInt("_AlphaDstBlend", 10); // ok
-                    material.SetInt("_DstBlend", 10);
-                    material.SetInt("_RenderQueueType", 4);
-                    material.SetInt("_SurfaceType", 1);
-                    material.SetInt("_ZTestDepthEqualForOpaque", 4);
-                    material.SetInt("_ZWrite", 1);
-
-                 
-
-                    
-                }
-
-                #endregion // change shader
+                    material.DisableKeyword("_ALPHABLEND_ON");
+                    material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", 4f);
+                    material.renderQueue = 2450;
+                    break;
+                default:
+                    material.SetOverrideTag("RenderType", "Transparent");
+                    material.DisableKeyword("_ALPHATEST_ON");
+                    material.EnableKeyword("_ALPHABLEND_ON");
+                    material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", 4f);
+                    material.renderQueue = 3000;
+                    break;
             }
         }
-        Debug.Log("Shaders converted for selected model.");
+
+        private static void DisableOutline(Material material)
+        {
+            SetFloatIfPresent(material, "_OutlineWidthMode", 0f);
+            SetFloatIfPresent(material, "_OutlineWidth", 0f);
+            material.DisableKeyword("MTOON_OUTLINE_WIDTH_WORLD");
+            material.DisableKeyword("MTOON_OUTLINE_WIDTH_SCREEN");
+        }
+
+        private static List<Material> CollectUniqueMaterials(GameObject root)
+        {
+            var result = new List<Material>();
+            var seen = new HashSet<Material>();
+            var renderers = root.GetComponentsInChildren<Renderer>(true);
+
+            foreach (var renderer in renderers)
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material != null && seen.Add(material))
+                    {
+                        result.Add(material);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private static float GetFloat(Material material, string propertyName, float fallback)
+        {
+            return material.HasProperty(propertyName) ? material.GetFloat(propertyName) : fallback;
+        }
+
+        private static Texture GetTexture(Material material, string propertyName)
+        {
+            return material.HasProperty(propertyName) ? material.GetTexture(propertyName) : null;
+        }
+
+        private static Color GetColor(Material material, string propertyName, Color fallback)
+        {
+            return material.HasProperty(propertyName) ? material.GetColor(propertyName) : fallback;
+        }
+
+        private static void SetFloatIfPresent(Material material, string propertyName, float value)
+        {
+            if (material.HasProperty(propertyName))
+            {
+                material.SetFloat(propertyName, value);
+            }
+        }
+
+        private static bool TryCreateMaterialBackup(Material material)
+        {
+            var assetPath = AssetDatabase.GetAssetPath(material);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return false;
+            }
+
+            var directory = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(directory))
+            {
+                return false;
+            }
+
+            var extension = Path.GetExtension(assetPath);
+            if (extension != ".mat" && extension != ".asset")
+            {
+                return false;
+            }
+
+            var backupDirectory = $"{directory}/{BackupDirectoryName}";
+            EnsureFolder(backupDirectory);
+
+            var fileName = Path.GetFileNameWithoutExtension(assetPath);
+            var backupPath = $"{backupDirectory}/{fileName}{BackupSuffix}{extension}";
+            if (AssetDatabase.LoadAssetAtPath<Material>(backupPath) != null)
+            {
+                return false;
+            }
+
+            return AssetDatabase.CopyAsset(assetPath, backupPath);
+        }
+
+        private static Material FindMaterialBackup(Material material)
+        {
+            var assetPath = AssetDatabase.GetAssetPath(material);
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return null;
+            }
+
+            var extension = Path.GetExtension(assetPath);
+            if (extension != ".mat" && extension != ".asset")
+            {
+                return null;
+            }
+
+            var directory = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
+            if (string.IsNullOrEmpty(directory))
+            {
+                return null;
+            }
+
+            var fileName = Path.GetFileNameWithoutExtension(assetPath);
+            var backupDirectory = $"{directory}/{BackupDirectoryName}";
+            var backupPath = $"{backupDirectory}/{fileName}{BackupSuffix}{extension}";
+            var backup = AssetDatabase.LoadAssetAtPath<Material>(backupPath);
+            if (backup != null)
+            {
+                return backup;
+            }
+
+            return FindMostRecentLegacyBackup(backupDirectory, fileName, extension);
+        }
+
+        private static Material FindMostRecentLegacyBackup(string backupDirectory, string fileName, string extension)
+        {
+            var absoluteDirectory = ToProjectAbsolutePath(backupDirectory);
+            if (string.IsNullOrEmpty(absoluteDirectory) || !Directory.Exists(absoluteDirectory))
+            {
+                return null;
+            }
+
+            var pattern = $"{fileName}_backup*{extension}";
+            var backupFiles = Directory.GetFiles(absoluteDirectory, pattern, SearchOption.TopDirectoryOnly);
+            if (backupFiles.Length == 0)
+            {
+                return null;
+            }
+
+            var newestPath = backupFiles[0];
+            var newestWriteTime = File.GetLastWriteTimeUtc(newestPath);
+            for (var i = 1; i < backupFiles.Length; i++)
+            {
+                var writeTime = File.GetLastWriteTimeUtc(backupFiles[i]);
+                if (writeTime > newestWriteTime)
+                {
+                    newestPath = backupFiles[i];
+                    newestWriteTime = writeTime;
+                }
+            }
+
+            var assetPath = ToProjectRelativePath(newestPath);
+            return string.IsNullOrEmpty(assetPath) ? null : AssetDatabase.LoadAssetAtPath<Material>(assetPath);
+        }
+
+        private static string ToProjectAbsolutePath(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return null;
+            }
+
+            var projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+        }
+
+        private static string ToProjectRelativePath(string absolutePath)
+        {
+            if (string.IsNullOrEmpty(absolutePath))
+            {
+                return null;
+            }
+
+            var projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..")).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            projectRoot += Path.DirectorySeparatorChar;
+            var fullPath = Path.GetFullPath(absolutePath);
+            if (!fullPath.StartsWith(projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            return fullPath.Substring(projectRoot.Length).Replace('\\', '/');
+        }
+
+        private static void EnsureFolder(string folderPath)
+        {
+            var parts = folderPath.Split('/');
+            if (parts.Length == 0)
+            {
+                return;
+            }
+
+            var current = parts[0];
+            for (var i = 1; i < parts.Length; i++)
+            {
+                var next = $"{current}/{parts[i]}";
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    AssetDatabase.CreateFolder(current, parts[i]);
+                }
+
+                current = next;
+            }
+        }
     }
 }

@@ -7,6 +7,7 @@ Shader "toshi/VLiveKit/livetoon"
         _TestTexture  ("Test Texture", 2D)        = "white" {}
         _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
         _Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
+        _TransparentThreshold ("Transparent Threshold", Range(0, 1)) = 0
         _Color ("Lit Color + Alpha", Color) = (1,1,1,1)
         _ShadeColor ("Shade Color", Color) = (0.97, 0.81, 0.86, 1)
         [NoScaleOffset] _MainTex ("Lit Texture + Alpha", 2D) = "white" {}
@@ -56,7 +57,7 @@ Shader "toshi/VLiveKit/livetoon"
 
         // original
 		_ReduSha ("Reduce Shadow", Float ) = 0.0
-		[HideInInspector] _ZTeForLiOpa("ZTeForLiOpa", int) = 3
+		[HideInInspector] _ZTeForLiOpa("ZTeForLiOpa", int) = 4
         _LambertThresh ("LambertThresh", Float) = 0.5
         _GradWidth     ("ShadowWidth", Range(0.003,1)) = 0.1
         // _Sat           ("Sat", Range(0,2)) = 1
@@ -805,6 +806,7 @@ Tags{"LightMode"="ForwardOnly"}
 	        #pragma multi_compile_fragment PUNCTUAL_SHADOW_LOW PUNCTUAL_SHADOW_MEDIUM PUNCTUAL_SHADOW_HIGH
 	        #pragma multi_compile_fragment DIRECTIONAL_SHADOW_LOW DIRECTIONAL_SHADOW_MEDIUM DIRECTIONAL_SHADOW_HIGH
             #pragma multi_compile_fragment AREA_SHADOW_MEDIUM AREA_SHADOW_HIGH
+            #pragma shader_feature_local_fragment _ENABLE_FOG_ON_TRANSPARENT
             
 			#include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Material.hlsl"
 			#include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/Lighting.hlsl"
@@ -852,6 +854,7 @@ Tags{"LightMode"="SRPDefaultUnlit"}
             #pragma multi_compile _ MTOON_OUTLINE_COLOR_FIXED MTOON_OUTLINE_COLOR_MIXED
             #pragma multi_compile _ _NORMALMAP
             #pragma multi_compile _ _ALPHATEST_ON _ALPHABLEND_ON
+            #pragma shader_feature_local_fragment _ENABLE_FOG_ON_TRANSPARENT
             #define MTOON_CLIP_IF_OUTLINE_IS_NONE
             #pragma vertex LitPassVertex_Outline
             #pragma fragment frag_forward

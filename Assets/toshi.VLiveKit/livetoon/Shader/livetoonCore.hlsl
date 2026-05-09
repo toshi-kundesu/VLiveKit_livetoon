@@ -145,17 +145,21 @@ float4 EL_AT_SC(PositionInputs posInput, float3 V, float4 inputColor)
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
+#ifdef _ENABLE_FOG_ON_TRANSPARENT
         float3 volColor, volOpacity;
 		EvaluateAtmosphericScattering(posInput, V, volColor, volOpacity);
 
 		result.rgb = result.rgb * (1.0 - volOpacity) + volColor * result.a;
+#endif
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
     {
+#ifdef _ENABLE_FOG_ON_TRANSPARENT
         float3 volColor, volOpacity;
 		EvaluateAtmosphericScattering(posInput, V, volColor, volOpacity);
 
 		result.rgb = result.rgb * (1.0 - volOpacity) + volColor * result.a;
+#endif
 
     }
     
@@ -248,6 +252,14 @@ float outlineTex = SAMPLE_TEXTURE2D_LOD(_OutlineWidthTexture, sampler_OutlineWid
     return vertex;
         }
 
+float CalculateTransparentOpacity(float4 mainTex)
+{
+    float threshold = clamp(-20.0, 1.0, _TransparentThreshold);
+    float thresholdAlpha = smoothstep(threshold, 1.0, mainTex.a);
+    float maskedAlpha = thresholdAlpha * mainTex.r;
+    return lerp(maskedAlpha, thresholdAlpha, _Color.a);
+}
+
         //RT TRANS CO
 void RT_TRANS_CO( float2 uv , float4 _MainTex_var , out float RTD_TRAN_OPA_Sli , float RTD_CO , out bool bo_co_val, bool is_rt, float3 positionWS, float3 normalDirection, float2 positionCS, inout float3 GLO_OUT) 
 {
@@ -279,12 +291,12 @@ void RT_TRANS_CO( float2 uv , float4 _MainTex_var , out float RTD_TRAN_OPA_Sli ,
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
-				RTD_TRAN_OPA_Sli = _MainTex_var.a * _Color.a; 
+				RTD_TRAN_OPA_Sli = CalculateTransparentOpacity(_MainTex_var);
 
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
     {
-				RTD_TRAN_OPA_Sli = _MainTex_var.a * _Color.a; 
+				RTD_TRAN_OPA_Sli = CalculateTransparentOpacity(_MainTex_var);
 
     }
 

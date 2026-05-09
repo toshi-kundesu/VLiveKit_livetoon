@@ -51,3 +51,27 @@ VLiveKitの一部として開発している、
     "com.toshi.vlivekit.livetoon": "https://github.com/toshi-kundesu/VLiveKit_livetoon.git?path=/Assets/toshi.VLiveKit/livetoon#main"
   }
 }
+```
+
+---
+
+## LiveToon Shader Converter
+
+Open the converter from `toshi/VLiveKit/LiveToon/Shader Converter`.
+
+The converter currently uses a LoadModel-style baseline for VRM 0.x / MToon materials:
+
+- swaps the material shader to `toshi/VLiveKit/livetoon`
+- preserves existing MToon-compatible material properties such as `_CullMode`, `_BlendMode`, `_SrcBlend`, `_DstBlend`, and `_ZWrite`
+- preserves `_Color`, including alpha, so MToon Transparent opacity is carried into LiveToon
+- fills `_ShadeTexture` from `_MainTex` only when `_ShadeTexture` is empty
+- updates `renderQueue` from `_BlendMode`: Opaque `2225`, Cutout `2450`, Transparent `3000`
+- restores the material `RenderType` tag and alpha keywords from `_BlendMode` after the shader swap
+- restores LiveToon's Forward pass ZTest from `_BlendMode`: Opaque uses `Equal`, Cutout/Transparent use `LEqual`
+- enables HDRP transparent fog for Transparent materials while keeping the shader-side fog path guarded by `_ENABLE_FOG_ON_TRANSPARENT`
+- keeps VRM Transparent materials as Transparent and uses LiveToon's legacy transparent opacity formula based on `_TransparentThreshold`, `_MainTex` alpha/red, and `_Color.a`
+- disables outline by default during conversion while LiveToon outline rendering is being tuned
+- optionally creates material backup assets beside the source material before converting
+- restores selected model materials from those backups with `Restore Materials From Backups`
+
+Backups are stored in a `LiveToonMaterialBackups` folder next to the source material asset. The converter keeps the first backup instead of overwriting it, so you can compare and restore the original VRM 0.x material values while debugging culling and double-sided rendering.
