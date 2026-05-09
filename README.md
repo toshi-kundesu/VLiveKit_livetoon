@@ -92,9 +92,9 @@ Tune `_PunctualLightIntensity` on the material when a scene needs stronger or we
 
 ## MToon Rim
 
-LiveToon keeps the stage-style punctual rim separate from the original MToon rim controls. The MToon rim path uses `_RimColor`, `_RimTexture`, `_RimLightingMix`, `_RimFresnelPower`, and `_RimLift`, then applies `_MToonRimIntensity` before adding it to the final color.
+LiveToon keeps the stage-style custom rim separate from the original MToon rim controls. The MToon rim path uses `_RimColor`, `_RimTexture`, `_RimLightingMix`, `_RimFresnelPower`, and `_RimLift`, then adds that result to the final color once.
 
-Use `_MToonRimIntensity` to balance the original MToon rim against LiveToon's custom local-light rim. Materials with black `_RimColor` remain unchanged.
+Use `_CustomRimIntensity` to balance LiveToon's custom local-light rim against the original MToon rim. Materials with black `_RimColor` remain unchanged for the MToon rim path.
 
 ---
 

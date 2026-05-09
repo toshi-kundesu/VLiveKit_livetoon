@@ -1400,8 +1400,8 @@ float alpha = RTD_TRAN_OPA_Sli;
     else {
         // nothing to do
     }
-    result.rgb += mtoonRimColor * _MToonRimIntensity;
-    result.rgb += punctualLightColorResult * rimColor_mask * _PunctualLightIntensity * mainTex.rgb;
+    result.rgb += mtoonRimColor;
+    result.rgb += punctualLightColorResult * rimColor_mask * _PunctualLightIntensity * _CustomRimIntensity * mainTex.rgb;
     // result.rgb += rimColor * punctualDiffuse;
     // result.rgb += specCol * punctualDiffuse;
     // result.rgb += punctualDiffuse;
