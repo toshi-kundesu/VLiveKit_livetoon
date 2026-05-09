@@ -62,12 +62,12 @@ Open the converter from `toshi/VLiveKit/LiveToon/Shader Converter`.
 The converter currently uses a LoadModel-style baseline for VRM 0.x / MToon materials:
 
 - swaps the material shader to `toshi/VLiveKit/livetoon`
-- preserves existing MToon-compatible material properties such as `_CullMode`, `_BlendMode`, `_SrcBlend`, `_DstBlend`, and `_ZWrite`
+- preserves existing MToon-compatible material properties such as `_CullMode` and `_BlendMode`
 - preserves `_Color`, including alpha, so MToon Transparent opacity is carried into LiveToon
 - fills `_ShadeTexture` from `_MainTex` only when `_ShadeTexture` is empty
-- updates `renderQueue` from `_BlendMode`: Opaque `2225`, Cutout `2450`, Transparent `3000`
+- rebuilds `_SrcBlend`, `_DstBlend`, `_ZWrite`, `_AlphaToMask`, and `renderQueue` from `_BlendMode`: Opaque `2225`, Cutout `2450`, Transparent `3000`
 - restores the material `RenderType` tag and alpha keywords from `_BlendMode` after the shader swap
-- restores LiveToon's Forward pass ZTest from `_BlendMode`: Opaque uses `Equal`, Cutout/Transparent use `LEqual`
+- keeps LiveToon's Forward pass on `LEqual` so depth prepass precision does not make Opaque or Cutout materials disappear at certain camera distances
 - enables HDRP transparent fog for Transparent materials while keeping the shader-side fog path guarded by `_ENABLE_FOG_ON_TRANSPARENT`
 - keeps VRM Transparent materials as Transparent and uses LiveToon's legacy transparent opacity formula based on `_TransparentThreshold`, `_MainTex` alpha/red, and `_Color.a`
 - disables outline by default during conversion while LiveToon outline rendering is being tuned

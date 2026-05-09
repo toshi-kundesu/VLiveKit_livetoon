@@ -784,7 +784,7 @@ Tags{"LightMode"="ForwardOnly"}
             // _乗算合成に変更
             Blend[_SrcBlend][_DstBlend]  
 			ZWrite [_ZWrite]
-            ZTest [_ZTeForLiOpa] 
+            ZTest LEqual
 
             BlendOp Add, Max
             AlphaToMask [_AlphaToMask]

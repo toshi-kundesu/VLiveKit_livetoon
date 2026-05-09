@@ -11,6 +11,11 @@ namespace VLiveKit.LiveToon.Editor
         private const string DefaultShaderName = "toshi/VLiveKit/livetoon";
         private const string BackupDirectoryName = "LiveToonMaterialBackups";
         private const string BackupSuffix = "_LiveToonBackup";
+        private static readonly float BlendZero = (float)UnityEngine.Rendering.BlendMode.Zero;
+        private static readonly float BlendOne = (float)UnityEngine.Rendering.BlendMode.One;
+        private static readonly float BlendSrcAlpha = (float)UnityEngine.Rendering.BlendMode.SrcAlpha;
+        private static readonly float BlendOneMinusSrcAlpha = (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha;
+        private static readonly float ZTestLessEqual = (float)UnityEngine.Rendering.CompareFunction.LessEqual;
 
         private GameObject selectedObject;
         private Shader shaderToUse;
@@ -193,7 +198,8 @@ namespace VLiveKit.LiveToon.Editor
                     material.DisableKeyword("_ALPHATEST_ON");
                     material.DisableKeyword("_ALPHABLEND_ON");
                     material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
-                    SetFloatIfPresent(material, "_ZTeForLiOpa", 3f);
+                    SetRenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 0f);
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     material.renderQueue = 2225;
                     break;
                 case 1:
@@ -201,18 +207,37 @@ namespace VLiveKit.LiveToon.Editor
                     material.EnableKeyword("_ALPHATEST_ON");
                     material.DisableKeyword("_ALPHABLEND_ON");
                     material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
-                    SetFloatIfPresent(material, "_ZTeForLiOpa", 4f);
+                    SetRenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 0f);
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     material.renderQueue = 2450;
+                    break;
+                case 3:
+                    material.SetOverrideTag("RenderType", "Transparent");
+                    material.DisableKeyword("_ALPHATEST_ON");
+                    material.EnableKeyword("_ALPHABLEND_ON");
+                    material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 1f, alphaToMask: 0f);
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
+                    material.renderQueue = 3000;
                     break;
                 default:
                     material.SetOverrideTag("RenderType", "Transparent");
                     material.DisableKeyword("_ALPHATEST_ON");
                     material.EnableKeyword("_ALPHABLEND_ON");
                     material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
-                    SetFloatIfPresent(material, "_ZTeForLiOpa", 4f);
+                    SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 0f, alphaToMask: 0f);
+                    SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     material.renderQueue = 3000;
                     break;
             }
+        }
+
+        private static void SetRenderStateFloats(Material material, float srcBlend, float dstBlend, float zWrite, float alphaToMask)
+        {
+            SetFloatIfPresent(material, "_SrcBlend", srcBlend);
+            SetFloatIfPresent(material, "_DstBlend", dstBlend);
+            SetFloatIfPresent(material, "_ZWrite", zWrite);
+            SetFloatIfPresent(material, "_AlphaToMask", alphaToMask);
         }
 
         private static void DisableOutline(Material material)
