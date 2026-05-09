@@ -355,7 +355,7 @@ float3 RT_RELGI_SUB1(
     return RTD_SL_OFF_OTHERS;
 }
 
-float4 CalculateDirectionalLighting(v2f i, DirectionalLightData directionalLightData, out float3 rimColor, out float3 specCol)
+float4 CalculateDirectionalLighting(v2f i, DirectionalLightData directionalLightData, bool useSceneShadow, out float3 rimColor, out float3 specCol)
 {
     // rimColor = float3(1,0,0);
     #ifdef MTOON_CLIP_IF_OUTLINE_IS_NONE
@@ -625,6 +625,8 @@ PositionInputs posInput = GetPositionInput(i.pos.xy, _ScreenSize.zw, i.pos.z, i.
 // PositionInputs posInput = GetPositionInput(i.pos.xy, _ScreenSize.zw, i.pos.z, i.pos.w, i.posWorld.xyz, tileIndex);
 
 // shadow
+if (useSceneShadow && directionalLightData.shadowIndex >= 0)
+{
 HDShadowContext sc = InitShadowContext();
 float3 shadow = GetDirectionalShadowAttenuation(
     sc,
@@ -636,6 +638,11 @@ float3 shadow = GetDirectionalShadowAttenuation(
 );
 
 shadowAttenuation = shadow.x; // まずはxでOK
+}
+else
+{
+    shadowAttenuation = 1;
+}
 if(_isFace == 1) {
     shadowAttenuation = 1;
 }
@@ -1353,8 +1360,17 @@ float alpha = RTD_TRAN_OPA_Sli;
         {
             DirectionalLightData directionalLightData = _DirectionalLightDatas[j];
             
-            result += CalculateDirectionalLighting(i, directionalLightData, rimColor, specCol);
+            result += CalculateDirectionalLighting(i, directionalLightData, true, rimColor, specCol);
         }
+    }
+    else if (_FallbackLightIntensity > 0)
+    {
+        DirectionalLightData fallbackDirectionalLightData = (DirectionalLightData)0;
+        float3 fallbackLightDir = normalize(normalize(i.viewDirWS) + float3(0.0, 0.25, 0.0));
+        fallbackDirectionalLightData.forward = -fallbackLightDir;
+        fallbackDirectionalLightData.color = _FallbackLightColor.rgb * (_FallbackLightIntensity * 10.0);
+        fallbackDirectionalLightData.shadowIndex = -1;
+        result += CalculateDirectionalLighting(i, fallbackDirectionalLightData, false, rimColor, specCol);
     }
     float3 punctualLightColorResult = float3(0,0,0);
     // result = float4(0,0,0,0);
@@ -1399,6 +1415,8 @@ uint2 tileIndex = uint2(i.pos.xy) / GetTileSize();
 }
 
 // シンプルなランバート二極化
+if (_DirectionalLightCount > 0)
+{
 DirectionalLightData directionalLightData_b = _DirectionalLightDatas[0];
 float3 lightDir_b = directionalLightData_b.forward;
 lightDir_b *= -1;
@@ -1444,6 +1462,7 @@ float lightIntensity_b = dot(lightDir_b, worldNormal_b);
 // outColor.rgb = i.normalWS;
 // float3 rembrandLightingTex = SAMPLE_TEXTURE2D(_RembrandLightingMask, sampler_RembrandLightingMask, i.uv0.xy).rgb;
 // outColor.rgb = rembrandLightingTex;
+}
 return outColor;
 }
 

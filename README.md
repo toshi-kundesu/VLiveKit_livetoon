@@ -78,6 +78,14 @@ Backups are stored in a `LiveToonMaterialBackups` folder next to the source mate
 
 ---
 
+## Directional Light Fallback
+
+LiveToon uses HDRP Directional Lights as the main toon key light so scene shadows and character shadow controls stay predictable. If a scene has no Directional Light, the shader now adds a camera-facing fallback key light instead of leaving the material black.
+
+The fallback only runs when `_DirectionalLightCount` is zero. Scene Directional Lights still use normal HDRP shadow attenuation, while the fallback skips scene shadow sampling. Tune `_FallbackLightIntensity` and `_FallbackLightColor` on the material when a lightless preview or stage setup needs a different default brightness.
+
+---
+
 ## LiveToon Legacy Snapshot
 
 `Assets/toshi.VLiveKit/livetoon_legacy` keeps a side-by-side snapshot of `Assets/toshi.VLiveKit/livetoon` from commit `411131ffd64863e66531960cf47656823bd3b932`.
