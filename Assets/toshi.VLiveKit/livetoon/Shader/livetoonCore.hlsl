@@ -65,15 +65,15 @@ int _VirtualLightCount;
 
 // Shadow maps & VP (slot0..3)
 TEXTURE2D(_HairShadowMap0); SAMPLER(sampler_HairShadowMap0); float4x4 _HairShadow_LightVP0;
-TEXTURE2D(_HairShadowMap1); SAMPLER(sampler_HairShadowMap1); float4x4 _HairShadow_LightVP1;
-TEXTURE2D(_HairShadowMap2); SAMPLER(sampler_HairShadowMap2); float4x4 _HairShadow_LightVP2;
-TEXTURE2D(_HairShadowMap3); SAMPLER(sampler_HairShadowMap3); float4x4 _HairShadow_LightVP3;
+TEXTURE2D(_HairShadowMap1); float4x4 _HairShadow_LightVP1;
+TEXTURE2D(_HairShadowMap2); float4x4 _HairShadow_LightVP2;
+TEXTURE2D(_HairShadowMap3); float4x4 _HairShadow_LightVP3;
 
 // projection texture
 TEXTURE2D(_ProjectTex0); SAMPLER(sampler_ProjectTex0); float _ProjectEnable0; float _ProjectIntensity0; float _ProjectFlipU0; float _ProjectFlipV0;
-TEXTURE2D(_ProjectTex1); SAMPLER(sampler_ProjectTex1); float _ProjectEnable1; float _ProjectIntensity1; float _ProjectFlipU1; float _ProjectFlipV1;
-TEXTURE2D(_ProjectTex2); SAMPLER(sampler_ProjectTex2); float _ProjectEnable2; float _ProjectIntensity2; float _ProjectFlipU2; float _ProjectFlipV2;
-TEXTURE2D(_ProjectTex3); SAMPLER(sampler_ProjectTex3); float _ProjectEnable3; float _ProjectIntensity3; float _ProjectFlipU3; float _ProjectFlipV3;
+TEXTURE2D(_ProjectTex1); float _ProjectEnable1; float _ProjectIntensity1; float _ProjectFlipU1; float _ProjectFlipV1;
+TEXTURE2D(_ProjectTex2); float _ProjectEnable2; float _ProjectIntensity2; float _ProjectFlipU2; float _ProjectFlipV2;
+TEXTURE2D(_ProjectTex3); float _ProjectEnable3; float _ProjectIntensity3; float _ProjectFlipU3; float _ProjectFlipV3;
 
 // ---- Params ----
 // 定数にする
@@ -353,6 +353,72 @@ float3 RT_RELGI_SUB1(
         (1.0 + ADVAL);
 
     return RTD_SL_OFF_OTHERS;
+}
+
+bool TryBuildPunctualFallbackDirectionalLight(v2f i, out DirectionalLightData fallbackDirectionalLightData)
+{
+    fallbackDirectionalLightData = (DirectionalLightData)0;
+
+    float3 accumulatedColor = float3(0.0, 0.0, 0.0);
+    float3 accumulatedDirection = float3(0.0, 0.0, 0.0);
+    float accumulatedWeight = 0.0;
+
+    for (int lightIndex = 0; lightIndex < _PunctualLightCount; lightIndex++)
+    {
+        LightData punctualLightData = _LightDatas[lightIndex];
+
+        float4 distance;
+        float3 lightToSample = i.posWorld.xyz - punctualLightData.positionRWS;
+        distance.w = dot(lightToSample, punctualLightData.forward);
+
+        float3 pixelToLightVec = -lightToSample;
+        float distanceSquared = max(dot(pixelToLightVec, pixelToLightVec), 1.0e-4);
+        float reciprocalDistance = rsqrt(distanceSquared);
+        float actualDistance = distanceSquared * reciprocalDistance;
+        float3 punctualLightDir = pixelToLightVec * reciprocalDistance;
+        distance.xyz = float3(actualDistance, distanceSquared, reciprocalDistance);
+
+        float attenuation = PunctualLightAttenuation(
+            distance,
+            punctualLightData.rangeAttenuationScale,
+            punctualLightData.rangeAttenuationBias,
+            punctualLightData.angleScale,
+            punctualLightData.angleOffset);
+
+        float3 weightedColor = punctualLightData.color * attenuation;
+        float weight = max(weightedColor.r, max(weightedColor.g, weightedColor.b));
+
+        accumulatedColor += weightedColor;
+        accumulatedDirection += punctualLightDir * weight;
+        accumulatedWeight += weight;
+    }
+
+    if (accumulatedWeight <= 1.0e-4)
+    {
+        return false;
+    }
+
+    float3 fallbackLightDir = normalize(normalize(i.viewDirWS) + float3(0.0, 0.25, 0.0));
+    if (dot(accumulatedDirection, accumulatedDirection) > 1.0e-4)
+    {
+        fallbackLightDir = normalize(accumulatedDirection / accumulatedWeight);
+    }
+
+    float fallbackIntensity = max(_FallbackLightIntensity, 0.0);
+    float3 fallbackColor = accumulatedColor * _FallbackLightColor.rgb * fallbackIntensity * 2.5;
+    float fallbackMax = max(fallbackColor.r, max(fallbackColor.g, fallbackColor.b));
+    float fallbackMaxAllowed = 16.0 * max(fallbackIntensity, 1.0e-4);
+
+    if (fallbackMax > fallbackMaxAllowed)
+    {
+        fallbackColor *= fallbackMaxAllowed / fallbackMax;
+    }
+
+    fallbackDirectionalLightData.forward = -fallbackLightDir;
+    fallbackDirectionalLightData.color = fallbackColor;
+    fallbackDirectionalLightData.shadowIndex = -1;
+
+    return true;
 }
 
 float4 CalculateDirectionalLighting(v2f i, DirectionalLightData directionalLightData, bool useSceneShadow, out float3 rimColor, out float3 specCol)
@@ -677,7 +743,7 @@ if (_VirtualLightCount > 1)
     float inRange, atten;
     float2 uv;
     SampleOneLight(absWS, _HairShadow_LightVP1,
-        TEXTURE2D_ARGS(_HairShadowMap1, sampler_HairShadowMap1),
+        TEXTURE2D_ARGS(_HairShadowMap1, sampler_HairShadowMap0),
         _ShadowBias, _ProjectFlipU1, _ProjectFlipV1,
         inRange, atten, uv);
 
@@ -689,7 +755,7 @@ if (_VirtualLightCount > 2)
     float inRange, atten;
     float2 uv;
     SampleOneLight(absWS, _HairShadow_LightVP2,
-        TEXTURE2D_ARGS(_HairShadowMap2, sampler_HairShadowMap2),
+        TEXTURE2D_ARGS(_HairShadowMap2, sampler_HairShadowMap0),
         _ShadowBias, _ProjectFlipU2, _ProjectFlipV2,
         inRange, atten, uv);
 
@@ -701,7 +767,7 @@ if (_VirtualLightCount > 3)
     float inRange, atten;
     float2 uv;
     SampleOneLight(absWS, _HairShadow_LightVP3,
-        TEXTURE2D_ARGS(_HairShadowMap3, sampler_HairShadowMap3),
+        TEXTURE2D_ARGS(_HairShadowMap3, sampler_HairShadowMap0),
         _ShadowBias, _ProjectFlipU3, _ProjectFlipV3,
         inRange, atten, uv);
 
@@ -1302,6 +1368,37 @@ float4 result = float4(col, alpha);
 
 }
 
+float4 frag_outline(v2f i) : SV_TARGET
+{
+#if defined(MTOON_CLIP_IF_OUTLINE_IS_NONE) && !defined(MTOON_OUTLINE_WIDTH_WORLD) && !defined(MTOON_OUTLINE_WIDTH_SCREEN)
+    clip(-1);
+#endif
+
+    if (_OutlineWidthMode == 0)
+    {
+        clip(-1);
+    }
+
+    float2 mainUv = LiveToonApplyUvAnimation(i.uv0);
+    float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, mainUv);
+
+    if (_BlendMode == (int)RENDER_MODE_CUTOUT)
+    {
+        clip(LiveToonCutoutDepthValue(mainTex.a) - 0.5);
+    }
+    else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT || _BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
+    {
+        clip(LiveToonTransparentDepthOpacity(mainTex) - 0.001);
+    }
+
+    float3 outlineColor = _OutlineColor.rgb;
+#if defined(MTOON_OUTLINE_COLOR_MIXED)
+    outlineColor *= lerp(float3(1.0, 1.0, 1.0), mainTex.rgb * _Color.rgb, _OutlineLightingMix);
+#endif
+
+    return float4(outlineColor, _OutlineColor.a);
+}
+
 float4 frag_forward(v2f i) : SV_TARGET
 {
         #ifdef MTOON_CLIP_IF_OUTLINE_IS_NONE
@@ -1367,10 +1464,15 @@ float alpha = RTD_TRAN_OPA_Sli;
     else if (_FallbackLightIntensity > 0)
     {
         DirectionalLightData fallbackDirectionalLightData = (DirectionalLightData)0;
-        float3 fallbackLightDir = normalize(normalize(i.viewDirWS) + float3(0.0, 0.25, 0.0));
-        fallbackDirectionalLightData.forward = -fallbackLightDir;
-        fallbackDirectionalLightData.color = _FallbackLightColor.rgb * (_FallbackLightIntensity * 10.0);
-        fallbackDirectionalLightData.shadowIndex = -1;
+        bool hasPunctualFallback = TryBuildPunctualFallbackDirectionalLight(i, fallbackDirectionalLightData);
+        if (!hasPunctualFallback)
+        {
+            float3 fallbackLightDir = normalize(normalize(i.viewDirWS) + float3(0.0, 0.25, 0.0));
+            fallbackDirectionalLightData.forward = -fallbackLightDir;
+            fallbackDirectionalLightData.color = _FallbackLightColor.rgb * (_FallbackLightIntensity * 10.0);
+            fallbackDirectionalLightData.shadowIndex = -1;
+        }
+
         float3 fallbackRimColor = float3(0,0,0);
         float3 fallbackSpecCol = float3(0,0,0);
         result += CalculateDirectionalLighting(i, fallbackDirectionalLightData, false, fallbackRimColor, fallbackSpecCol);
@@ -1401,7 +1503,23 @@ float alpha = RTD_TRAN_OPA_Sli;
         // nothing to do
     }
     result.rgb += mtoonRimColor;
-    result.rgb += punctualLightColorResult * rimColor_mask * _PunctualLightIntensity * _CustomRimIntensity * mainTex.rgb;
+
+    float3 customRimLight = punctualDiffuse * rimColor_mask * _PunctualLightIntensity;
+    float customRimLightMax = max(customRimLight.r, max(customRimLight.g, customRimLight.b));
+    float customRimLightMaxAllowed = (_DirectionalLightCount > 0) ? 1.0 : 1.6;
+    if (customRimLightMax > customRimLightMaxAllowed)
+    {
+        customRimLight *= customRimLightMaxAllowed / customRimLightMax;
+    }
+
+    float customRimSceneScale = (_DirectionalLightCount > 0) ? 1.0 : 0.9;
+    result.rgb += customRimLight * _CustomRimIntensity * customRimSceneScale * mainTex.rgb;
+
+    if (_DirectionalLightCount == 0)
+    {
+        float3 noDirectionalBaseLift = saturate(punctualDiffuse) * _PunctualLightIntensity * 0.22 * mainTex.rgb;
+        result.rgb += noDirectionalBaseLift;
+    }
     // result.rgb += rimColor * punctualDiffuse;
     // result.rgb += specCol * punctualDiffuse;
     // result.rgb += punctualDiffuse;
@@ -1470,7 +1588,3 @@ float lightIntensity_b = dot(lightDir_b, worldNormal_b);
 }
 return outColor;
 }
-
-
-
-

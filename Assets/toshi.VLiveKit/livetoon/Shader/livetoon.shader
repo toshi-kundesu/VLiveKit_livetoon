@@ -55,6 +55,8 @@ Shader "toshi/VLiveKit/livetoon"
         [HideInInspector] _DstBlend ("_DstBlend", Float) = 0.0
         [HideInInspector] _ZWrite ("_ZWrite", Float) = 1.0
         [HideInInspector] _AlphaToMask ("_AlphaToMask", Float) = 0.0
+        [HideInInspector] _AlphaCutoffPrepass ("_AlphaCutoffPrepass", Range(0, 1)) = 0.5
+        [HideInInspector] _AlphaCutoffPostpass ("_AlphaCutoffPostpass", Range(0, 1)) = 0.5
 
         [HideInInspector] _UseCustomBlend ("_UseCustomBlend", Float) = 0
 [HideInInspector] _BlendOp ("_BlendOp", Float) = 0
@@ -114,6 +116,7 @@ Shader "toshi/VLiveKit/livetoon"
     #define RENDER_MODE_CUTOUT 1
     #define RENDER_MODE_TRANSPARENT 2
     #define RENDER_MODE_TRANSPARENT_WITH_ZWRITE 3
+    #define VLIVEKIT_LIVETOON_TWO_PI 6.28318530718
 
 
 
@@ -190,6 +193,8 @@ uniform float _OutlineCullMode;
 uniform float _SrcBlend;
 uniform float _DstBlend;
 uniform float _ZWrite;
+uniform float _AlphaCutoffPrepass;
+uniform float _AlphaCutoffPostpass;
 uniform float _UseCustomBlend;
 uniform float _BlendOp;
 
@@ -324,6 +329,130 @@ SAMPLER(sampler_HeightMap);
 TEXTURE2D(_JitterTex);
 SAMPLER(sampler_JitterTex);
 
+struct LiveToonDepthAttributes
+{
+    float4 positionOS : POSITION;
+    float2 texcoord : TEXCOORD0;
+    UNITY_VERTEX_INPUT_INSTANCE_ID
+};
+
+struct LiveToonDepthVaryings
+{
+    float4 positionCS : SV_POSITION;
+    float2 uv : TEXCOORD0;
+    UNITY_VERTEX_INPUT_INSTANCE_ID
+    UNITY_VERTEX_OUTPUT_STEREO
+};
+
+LiveToonDepthVaryings LiveToonDepthVertex(LiveToonDepthAttributes input)
+{
+    LiveToonDepthVaryings output;
+    ZERO_INITIALIZE(LiveToonDepthVaryings, output);
+
+    UNITY_SETUP_INSTANCE_ID(input);
+    UNITY_TRANSFER_INSTANCE_ID(input, output);
+    UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
+
+    output.uv = input.texcoord;
+    output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+    return output;
+}
+
+float2 LiveToonApplyUvAnimation(float2 mainUv)
+{
+    float uvAnim = SAMPLE_TEXTURE2D(_UvAnimMaskTexture, sampler_UvAnimMaskTexture, mainUv).r;
+    mainUv += float2(_UvAnimScrollX, _UvAnimScrollY) * uvAnim;
+    float rotateRad = _UvAnimRotation * VLIVEKIT_LIVETOON_TWO_PI * uvAnim;
+    const float2 rotatePivot = float2(0.5, 0.5);
+    return mul(float2x2(cos(rotateRad), -sin(rotateRad), sin(rotateRad), cos(rotateRad)), mainUv - rotatePivot) + rotatePivot;
+}
+
+float LiveToonCutoutDepthValue(float alpha)
+{
+    if (1.0 - _Cutoff > 0.5)
+    {
+        return 1.0 - (1.0 - 2.0 * ((1.0 - _Cutoff) - 0.5)) * (1.0 - alpha);
+    }
+
+    return 2.0 * (1.0 - _Cutoff) * alpha;
+}
+
+float LiveToonTransparentDepthOpacity(float4 mainTex)
+{
+    float threshold = clamp(-20.0, 1.0, _TransparentThreshold);
+    float thresholdAlpha = smoothstep(threshold, 1.0, mainTex.a);
+    float maskedAlpha = thresholdAlpha * mainTex.r;
+    return lerp(maskedAlpha, thresholdAlpha, _Color.a);
+}
+
+void LiveToonAlphaClipDepthOnly(float4 mainTex)
+{
+    if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
+    {
+        clip(-1.0);
+    }
+    else if (_BlendMode == (int)RENDER_MODE_CUTOUT)
+    {
+        clip(LiveToonCutoutDepthValue(mainTex.a) - 0.5);
+    }
+    else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
+    {
+        clip(LiveToonTransparentDepthOpacity(mainTex) - 0.001);
+    }
+}
+
+void LiveToonAlphaClipTransparentDepth(float4 mainTex, float cutoff)
+{
+    if (_BlendMode == (int)RENDER_MODE_CUTOUT)
+    {
+        clip(LiveToonCutoutDepthValue(mainTex.a) - 0.5);
+    }
+    else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT || _BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
+    {
+        clip(LiveToonTransparentDepthOpacity(mainTex) - cutoff);
+    }
+}
+
+float4 LiveToonDepthOnlyFragment(LiveToonDepthVaryings input) : SV_TARGET
+{
+    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+    UNITY_SETUP_INSTANCE_ID(input);
+
+    float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, LiveToonApplyUvAnimation(input.uv));
+    LiveToonAlphaClipDepthOnly(mainTex);
+    return 0;
+}
+
+float4 LiveToonTransparentDepthPrepassFragment(LiveToonDepthVaryings input) : SV_TARGET
+{
+    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+    UNITY_SETUP_INSTANCE_ID(input);
+
+    if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
+    {
+        clip(-1.0);
+    }
+
+    float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, LiveToonApplyUvAnimation(input.uv));
+    LiveToonAlphaClipTransparentDepth(mainTex, _AlphaCutoffPrepass);
+    return 0;
+}
+
+float4 LiveToonTransparentDepthPostpassFragment(LiveToonDepthVaryings input) : SV_TARGET
+{
+    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+    UNITY_SETUP_INSTANCE_ID(input);
+
+    if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
+    {
+        clip(-1.0);
+    }
+
+    float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, LiveToonApplyUvAnimation(input.uv));
+    LiveToonAlphaClipTransparentDepth(mainTex, _AlphaCutoffPostpass);
+    return 0;
+}
+
 
 	ENDHLSL
 
@@ -339,8 +468,8 @@ SAMPLER(sampler_JitterTex);
 		Pass
         {
 
-Name"GBuffer"
-Tags{"LightMode"="GBuffer"}
+Name"DisabledGBuffer"
+Tags{"LightMode"="VLiveToonDisabledGBuffer"}
 
             Cull [_CullMode]
 			ZTest LEqual    
@@ -770,6 +899,148 @@ void ShadowPassFragment(Varyings input, out float4 outColor : SV_Target0)
         }
 
 
+        Pass
+        {
+
+Name"DepthOnly"
+Tags{"LightMode"="DepthOnly"}
+
+            Cull [_CullMode]
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+
+            HLSLPROGRAM
+
+            #pragma vertex DepthOnlyVertex
+            #pragma fragment DepthOnlyFragment
+
+            #include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Material.hlsl"
+
+            struct DepthOnlyAttributes
+            {
+                float4 positionOS : POSITION;
+                float2 texcoord : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+            };
+
+            struct DepthOnlyVaryings
+            {
+                float4 positionCS : SV_POSITION;
+                float2 uv : TEXCOORD0;
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
+
+            DepthOnlyVaryings DepthOnlyVertex(DepthOnlyAttributes input)
+            {
+                DepthOnlyVaryings output;
+                ZERO_INITIALIZE(DepthOnlyVaryings, output);
+
+                UNITY_SETUP_INSTANCE_ID(input);
+                UNITY_TRANSFER_INSTANCE_ID(input, output);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
+
+                output.uv = input.texcoord;
+                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                return output;
+            }
+
+            float DepthOnlyTransparentOpacity(float4 mainTex)
+            {
+                float threshold = clamp(-20.0, 1.0, _TransparentThreshold);
+                float thresholdAlpha = smoothstep(threshold, 1.0, mainTex.a);
+                float maskedAlpha = thresholdAlpha * mainTex.r;
+                return lerp(maskedAlpha, thresholdAlpha, _Color.a);
+            }
+
+            void DepthOnlyAlphaClip(float4 mainTex)
+            {
+                if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
+                {
+                    clip(-1.0);
+                }
+                else if (_BlendMode == (int)RENDER_MODE_CUTOUT)
+                {
+                    float cutoutValue;
+                    if (1.0 - _Cutoff > 0.5)
+                    {
+                        cutoutValue = 1.0 - (1.0 - 2.0 * ((1.0 - _Cutoff) - 0.5)) * (1.0 - mainTex.a);
+                    }
+                    else
+                    {
+                        cutoutValue = 2.0 * (1.0 - _Cutoff) * mainTex.a;
+                    }
+
+                    clip(cutoutValue - 0.5);
+                }
+                else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
+                {
+                    clip(DepthOnlyTransparentOpacity(mainTex) - 0.001);
+                }
+            }
+
+            float4 DepthOnlyFragment(DepthOnlyVaryings input) : SV_TARGET
+            {
+                UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+                UNITY_SETUP_INSTANCE_ID(input);
+
+                float2 mainUv = input.uv;
+                float uvAnim = SAMPLE_TEXTURE2D(_UvAnimMaskTexture, sampler_UvAnimMaskTexture, mainUv).r;
+                mainUv += float2(_UvAnimScrollX, _UvAnimScrollY) * uvAnim;
+                float rotateRad = _UvAnimRotation * VLIVEKIT_LIVETOON_TWO_PI * uvAnim;
+                const float2 rotatePivot = float2(0.5, 0.5);
+                mainUv = mul(float2x2(cos(rotateRad), -sin(rotateRad), sin(rotateRad), cos(rotateRad)), mainUv - rotatePivot) + rotatePivot;
+
+                float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, mainUv);
+                DepthOnlyAlphaClip(mainTex);
+                return 0;
+            }
+
+            ENDHLSL
+        }
+
+
+        Pass
+        {
+
+Name"TransparentDepthPrepass"
+Tags{"LightMode"="TransparentDepthPrepass"}
+
+            Cull [_CullMode]
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+
+            HLSLPROGRAM
+
+            #pragma vertex LiveToonDepthVertex
+            #pragma fragment LiveToonTransparentDepthPrepassFragment
+
+            ENDHLSL
+        }
+
+
+        Pass
+        {
+
+Name"TransparentDepthPostpass"
+Tags{"LightMode"="TransparentDepthPostpass"}
+
+            Cull [_CullMode]
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+
+            HLSLPROGRAM
+
+            #pragma vertex LiveToonDepthVertex
+            #pragma fragment LiveToonTransparentDepthPostpassFragment
+
+            ENDHLSL
+        }
+
+
 		
 // Forward Base + Add
                 Pass
@@ -860,12 +1131,9 @@ Tags{"LightMode"="SRPDefaultUnlit"}
             #pragma shader_feature _ MTOON_DEBUG_NORMAL MTOON_DEBUG_LITSHADERATE
             #pragma multi_compile _ MTOON_OUTLINE_WIDTH_WORLD MTOON_OUTLINE_WIDTH_SCREEN
             #pragma multi_compile _ MTOON_OUTLINE_COLOR_FIXED MTOON_OUTLINE_COLOR_MIXED
-            #pragma multi_compile _ _NORMALMAP
-            #pragma multi_compile _ _ALPHATEST_ON _ALPHABLEND_ON
-            #pragma shader_feature_local_fragment _ENABLE_FOG_ON_TRANSPARENT
             #define MTOON_CLIP_IF_OUTLINE_IS_NONE
             #pragma vertex LitPassVertex_Outline
-            #pragma fragment frag_forward
+            #pragma fragment frag_outline
 
             // HDRP shadow filter algorithm fallback
             // HDRP 14.x の HDShadowAlgorithms.hlsl は SHADOW_LOW / MEDIUM / HIGH を要求する
@@ -876,11 +1144,14 @@ Tags{"LightMode"="SRPDefaultUnlit"}
                     #endif
                 #endif
             #endif
+            #ifndef AREA_SHADOW_LOW
+                #ifndef AREA_SHADOW_MEDIUM
+                    #ifndef AREA_SHADOW_HIGH
+                        #define AREA_SHADOW_MEDIUM
+                    #endif
+                #endif
+            #endif
 
-
-	        #pragma multi_compile_fragment PUNCTUAL_SHADOW_LOW PUNCTUAL_SHADOW_MEDIUM PUNCTUAL_SHADOW_HIGH
-	        #pragma multi_compile_fragment DIRECTIONAL_SHADOW_LOW DIRECTIONAL_SHADOW_MEDIUM DIRECTIONAL_SHADOW_HIGH
-            #pragma multi_compile_fragment AREA_SHADOW_MEDIUM AREA_SHADOW_HIGH
 
 			#include "Packages/com.unity.render-pipelines.high-definition/Runtime/Material/Material.hlsl"
 			#include "Packages/com.unity.render-pipelines.high-definition/Runtime/Lighting/Lighting.hlsl"

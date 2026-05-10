@@ -75,7 +75,6 @@ float3 objectNormal = mul((float3x3)UNITY_MATRIX_I_M, sphereWorldNorm);
     // ここで法線の球面化
     
     float4 result = TransformObjectToHClip(v.vertex.xyz);
-    result.z += 0.001 * result.w;
     return InitializeV2F(v, result, 0);
 }
 
@@ -88,6 +87,5 @@ v2f LitPassVertex_Outline(appdata_full v)
     // v.vertex.xyz += float3(1.0, 0.0, 0.0);
     v.normal = normalize(v.normal);
     float4 result = CalculateOutlineVertexClipPosition(v);
-    result.z += 0.001 * result.w;
     return InitializeV2F(v, result, 1);
 }
