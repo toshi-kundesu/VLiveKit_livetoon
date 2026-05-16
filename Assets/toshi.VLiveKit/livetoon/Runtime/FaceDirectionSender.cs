@@ -41,11 +41,12 @@ public class FaceDirectionSender : MonoBehaviour
 
         Vector3 fwd = (overrideDirection ? head.rotation * customForward : head.forward).normalized;
         Vector3 up  = (overrideDirection ? head.rotation * customUp      : head.up).normalized;
+        var renderers = FindSceneObjects<Renderer>();
 
     
 foreach (var mat in targetMaterials.Where(m => m != null))
 {
-    var renderer = FindObjectsOfType<Renderer>()
+    var renderer = renderers
                    .FirstOrDefault(r => r.sharedMaterial == mat ||
                                         r.sharedMaterials.Contains(mat));
     if (renderer == null) continue;
@@ -68,6 +69,15 @@ foreach (var mat in targetMaterials.Where(m => m != null))
     }
 
     // ───────────────────────────────────────
+    static T[] FindSceneObjects<T>() where T : Object
+    {
+#if UNITY_2022_2_OR_NEWER || UNITY_2023_1_OR_NEWER || UNITY_6000_0_OR_NEWER
+        return Object.FindObjectsByType<T>(FindObjectsSortMode.None);
+#else
+        return Object.FindObjectsOfType<T>();
+#endif
+    }
+
     void OnDrawGizmos()
     {
         if (head == null) return;

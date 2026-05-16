@@ -2,7 +2,7 @@
   "name": "toshi.VLiveKit.livetoon.Editor",
   "rootNamespace": "toshi.VLiveKit.livetoon.Editor",
   "references": [
-    "toshi.VLiveKit.livetoon.Runtime"
+    "toshi.VLiveKit.livetoon"
   ],
   "includePlatforms": [
     "Editor"

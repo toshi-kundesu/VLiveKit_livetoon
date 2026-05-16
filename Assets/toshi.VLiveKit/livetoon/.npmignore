@@ -1,3 +1,14 @@
 *.tgz
 .codex-npm-cache/
-
+Sample/
+Sample.meta
+VRM/
+VRM.meta
+indoor/
+indoor.meta
+indoor.unity
+indoor.unity.meta
+outdoor.unity
+outdoor.unity.meta
+Prefabs/PERFORMERS.prefab
+Prefabs/PERFORMERS.prefab.meta

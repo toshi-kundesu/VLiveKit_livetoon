@@ -52,6 +52,26 @@ struct v2f
 //     return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
 // }
 
+float LiveToonLuminance(float3 color)
+{
+    return dot(color, float3(0.2126, 0.7152, 0.0722));
+}
+
+float LiveToonBoundarySaturationWeight(float3 baseColor, float weight, float alpha, float saturationStrength)
+{
+    float luma = LiveToonLuminance(saturate(baseColor));
+    float visibleColor = smoothstep(0.08, 0.24, luma);
+    return saturate(weight * max(saturationStrength, 0.0)) * visibleColor * saturate(alpha * 8.0);
+}
+
+float3 LiveToonPreventBoundaryDarkening(float3 baseColor, float3 boostedColor)
+{
+    float baseLuma = LiveToonLuminance(max(baseColor, float3(0.0, 0.0, 0.0)));
+    float boostedLuma = LiveToonLuminance(max(boostedColor, float3(0.0, 0.0, 0.0)));
+    boostedColor *= max(1.0, baseLuma / max(boostedLuma, 1.0e-4));
+    return max(boostedColor, baseColor);
+}
+
 // ============================================================
 // Custom Shadow (Hair ShadowMap) for DirectionalLight Attenuation
 // ============================================================
@@ -69,6 +89,17 @@ TEXTURE2D(_HairShadowMap1); float4x4 _HairShadow_LightVP1;
 TEXTURE2D(_HairShadowMap2); float4x4 _HairShadow_LightVP2;
 TEXTURE2D(_HairShadowMap3); float4x4 _HairShadow_LightVP3;
 
+TEXTURE2D(_LiveToonBoxShadowMap); SAMPLER(sampler_LiveToonBoxShadowMap);
+float4x4 _LiveToonBoxShadowVP;
+float _LiveToonBoxShadowEnabled;
+float _LiveToonBoxShadowStrength;
+float _LiveToonBoxShadowBias;
+float _LiveToonBoxShadowUseDepth;
+float _LiveToonBoxShadowSilhouetteAttenuation;
+float _LiveToonBoxShadowFlipU;
+float _LiveToonBoxShadowFlipV;
+float _LiveToonBoxShadowInvertSilhouette;
+
 // projection texture
 TEXTURE2D(_ProjectTex0); SAMPLER(sampler_ProjectTex0); float _ProjectEnable0; float _ProjectIntensity0; float _ProjectFlipU0; float _ProjectFlipV0;
 TEXTURE2D(_ProjectTex1); float _ProjectEnable1; float _ProjectIntensity1; float _ProjectFlipU1; float _ProjectFlipV1;
@@ -77,9 +108,13 @@ TEXTURE2D(_ProjectTex3); float _ProjectEnable3; float _ProjectIntensity3; float 
 
 // ---- Params ----
 // 定数にする
-float _ShadowBias=0.8;              // 既にあるならそれを使ってOK
-float _ShadowStrength=0.02;    // 0..1 (1でフル適用) 既にあるならそのまま
+float _ShadowBias=0.004;              // Light-space depth bias for the front hair shadow map.
+float _ShadowStrength=0.85;    // 0..1 (1でフル適用)
 float _ClampToBox=1;  // 0/1 (1でXY+Z箱判定)
+float _LiveToonFrontHairShadowDebugForce;
+float _LiveToonFrontHairShadowDebugAttenuation;
+float _LiveToonFrontHairShadowDebugIgnoreProjection;
+float _LiveToonFrontHairShadowDebugUseCasterSilhouette;
 
 // 「1灯」分の影判定（投影範囲内か＆髪深度比較）
 // 返り値：atten (1=光が届く, 0=遮蔽)
@@ -95,6 +130,57 @@ float3 ToAbsoluteWorld(float3 posWS_or_RWS)
     #else
         return posWS_or_RWS;
     #endif
+}
+
+float3 LiveToonSafeNormalize(float3 value, float3 fallback)
+{
+    return dot(value, value) > 1.0e-6 ? normalize(value) : normalize(fallback);
+}
+
+float3 LiveToonLimitFaceLightDirection(float3 lightDir)
+{
+    float intensity = saturate(_FaceLightLimitIntensity);
+    if (intensity <= 1.0e-4)
+    {
+        return normalize(lightDir);
+    }
+
+    float3 faceF = LiveToonSafeNormalize(_FaceForwardDirection.xyz, float3(0.0, 0.0, 1.0));
+    float3 faceU = LiveToonSafeNormalize(_FaceUpDirection.xyz, float3(0.0, 1.0, 0.0));
+    float3 faceR = LiveToonSafeNormalize(cross(faceU, faceF), float3(1.0, 0.0, 0.0));
+    faceU = LiveToonSafeNormalize(cross(faceF, faceR), faceU);
+
+    float3 toLight = -normalize(lightDir);
+    float yawRad = atan2(dot(faceR, toLight), dot(faceF, toLight));
+    float pitchRad = asin(clamp(dot(faceU, toLight), -1.0, 1.0));
+
+    float yawStepRad = max(radians(max(_FaceLightYawStep, 1.0)), 1.0e-4);
+    float fixedYaw = floor(yawRad / yawStepRad + 0.5) * yawStepRad;
+    float halfYawStep = yawStepRad * 0.5;
+    float yawOffset = atan2(sin(yawRad - fixedYaw), cos(yawRad - fixedYaw));
+    float normalizedYawOffset = saturate(abs(yawOffset) / max(halfYawStep, 1.0e-4));
+    float stickyRange = min(saturate(_FaceLightYawStickyRange), 0.95);
+    float easedYawOffset = smoothstep(stickyRange, 1.0, normalizedYawOffset) * halfYawStep * sign(yawOffset);
+    float limitedYaw = fixedYaw + easedYawOffset;
+    float yawDelta = atan2(sin(limitedYaw - yawRad), cos(limitedYaw - yawRad));
+    yawRad += yawDelta * intensity;
+
+    pitchRad = lerp(pitchRad, 0.0, saturate(_FaceLightPitchFlatten) * intensity);
+
+    float cosP = cos(pitchRad);
+    float3 fixedToLight =
+        faceF * cosP * cos(yawRad) +
+        faceR * cosP * sin(yawRad) +
+        faceU * sin(pitchRad);
+
+    return normalize(-fixedToLight);
+}
+
+float2 LiveToonApplyProjectionFlip(float2 uv, float flipU, float flipV)
+{
+    uv.x = flipU > 0.5 ? 1.0 - uv.x : uv.x;
+    uv.y = flipV > 0.5 ? 1.0 - uv.y : uv.y;
+    return uv;
 }
 
 void SampleOneLight(
@@ -113,6 +199,7 @@ void SampleOneLight(
     float3 ndc = clip.xyz / max(1e-6, clip.w); // -1..1
 
     uv = ndc.xy * 0.5 + 0.5;
+    uv = LiveToonApplyProjectionFlip(uv, projFlipU, projFlipV);
 
     float inXY = (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1) ? 1.0 : 0.0;
     float inZ  = (ndc.z >= -1.0 && ndc.z <= 1.0) ? 1.0 : 0.0;
@@ -128,6 +215,40 @@ void SampleOneLight(
     float hairDepth01 = SAMPLE_TEXTURE2D(shadowMap, shadowMap_sampler, uv).r;
 
     atten = step(depth01 - shadowBias, hairDepth01);
+}
+
+float LiveToonSampleBoxShadow(float3 positionWS)
+{
+    if (_LiveToonBoxShadowEnabled < 0.5)
+    {
+        return 1.0;
+    }
+
+    float4 clip = mul(_LiveToonBoxShadowVP, float4(positionWS, 1.0));
+    float3 ndc = clip.xyz / max(abs(clip.w), 1.0e-6);
+    float2 uv = ndc.xy * 0.5 + 0.5;
+    uv = LiveToonApplyProjectionFlip(uv, _LiveToonBoxShadowFlipU, _LiveToonBoxShadowFlipV);
+
+    float inXY = (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) ? 1.0 : 0.0;
+    float inZ = (ndc.z >= -1.0 && ndc.z <= 1.0) ? 1.0 : 0.0;
+    float inRange = inXY * inZ;
+    if (inRange < 0.5)
+    {
+        return 1.0;
+    }
+
+    float depth01 = saturate(ndc.z * 0.5 + 0.5);
+    float casterDepth01 = SAMPLE_TEXTURE2D(_LiveToonBoxShadowMap, sampler_LiveToonBoxShadowMap, uv).r;
+    float casterMask = casterDepth01 < 0.999 ? 1.0 : 0.0;
+    casterMask = _LiveToonBoxShadowInvertSilhouette > 0.5 ? 1.0 - casterMask : casterMask;
+
+    float depthAttenuation = step(depth01 - _LiveToonBoxShadowBias, casterDepth01);
+    float silhouetteAttenuation = lerp(1.0, saturate(_LiveToonBoxShadowSilhouetteAttenuation), casterMask);
+    float attenuation = _LiveToonBoxShadowUseDepth > 0.5
+        ? lerp(1.0, depthAttenuation, casterMask)
+        : silhouetteAttenuation;
+
+    return lerp(1.0, attenuation, saturate(_LiveToonBoxShadowStrength) * inRange);
 }
 
 
@@ -421,6 +542,165 @@ bool TryBuildPunctualFallbackDirectionalLight(v2f i, out DirectionalLightData fa
     return true;
 }
 
+float3 LiveToonAttenuateLightColor(float3 color)
+{
+    float monochrome = max(1.0e-5, max(color.r, max(color.g, color.b)));
+    return lerp(color, monochrome.xxx, saturate(_LightColorAttenuation));
+}
+
+float3 LiveToonSampleEnvironmentReflection(PositionInputs posInput, float3 viewDirectionWS, float3 normalWS, float perceptualSmoothness)
+{
+    float3 reflectionColor = float3(0.0, 0.0, 0.0);
+    float hierarchyWeight = 0.0;
+    float perceptualRoughness = saturate(1.0 - perceptualSmoothness);
+    float3 reflectionDirection = reflect(-normalize(viewDirectionWS), normalize(normalWS));
+
+    LightLoopContext context;
+    context.shadowContext = InitShadowContext();
+    context.shadowValue = 1;
+    context.contactShadow = 0;
+    context.contactShadowFade = 0;
+    context.sampleReflection = SINGLE_PASS_CONTEXT_SAMPLE_REFLECTION_PROBES;
+#ifdef APPLY_FOG_ON_SKY_REFLECTIONS
+    context.positionWS = posInput.positionWS;
+#endif
+
+    uint envLightStart;
+    uint envLightCount;
+#ifndef LIGHTLOOP_DISABLE_TILE_AND_CLUSTER
+    GetCountAndStart(posInput, LIGHTCATEGORY_ENV, envLightStart, envLightCount);
+#else
+    envLightCount = _EnvLightCount;
+    envLightStart = 0;
+#endif
+
+    uint envLightListOffset = 0;
+    while (envLightListOffset < envLightCount && hierarchyWeight < 1.0)
+    {
+        uint envLightIndex = FetchIndex(envLightStart, envLightListOffset);
+        envLightListOffset++;
+        if (envLightIndex == -1)
+        {
+            break;
+        }
+
+        EnvLightData envLightData = FetchEnvLight(envLightIndex);
+        float weight = 1.0;
+        float3 probeDirection = reflectionDirection;
+        EvaluateLight_EnvIntersection(posInput.positionWS, normalWS, envLightData, envLightData.influenceShapeType, probeDirection, weight);
+
+        float lod = PerceptualRoughnessToMipmapLevel(perceptualRoughness) * envLightData.roughReflections;
+        float4 sampleColor = SampleEnv(context, envLightData.envIndex, probeDirection, lod, envLightData.rangeCompressionFactorCompensation, posInput.positionNDC);
+        weight *= sampleColor.a;
+        UpdateLightingHierarchyWeights(hierarchyWeight, weight);
+        reflectionColor += sampleColor.rgb * weight * envLightData.multiplier;
+    }
+
+    if (_EnvLightSkyEnabled && hierarchyWeight < 1.0)
+    {
+        context.sampleReflection = SINGLE_PASS_CONTEXT_SAMPLE_SKY;
+        EnvLightData skyEnvLightData = InitSkyEnvLightData(0);
+        float skyWeight = 1.0 - hierarchyWeight;
+        float skyLod = PerceptualRoughnessToMipmapLevel(perceptualRoughness) * skyEnvLightData.roughReflections;
+        float4 skyColor = SampleEnv(context, skyEnvLightData.envIndex, reflectionDirection, skyLod, skyEnvLightData.rangeCompressionFactorCompensation, posInput.positionNDC);
+        reflectionColor += skyColor.rgb * skyWeight * skyEnvLightData.multiplier;
+    }
+
+    return reflectionColor * GetCurrentExposureMultiplier();
+}
+
+float3 LiveToonEvaluateEnvironmentLighting(PositionInputs posInput, float3 viewDirectionWS, float3 normalWS, float3 baseColor)
+{
+    float3 ambientDiffuse = max(EvaluateAmbientProbe(normalWS), float3(0.0, 0.0, 0.0)) * GetCurrentExposureMultiplier();
+    ambientDiffuse = LiveToonAttenuateLightColor(ambientDiffuse);
+
+    float3 environment = ambientDiffuse * baseColor * saturate(_IndirectLightIntensity);
+
+    float reflectionIntensity = max(_ReflectionProbeIntensity, 0.0);
+    if (reflectionIntensity > 1.0e-4)
+    {
+        float3 probeReflection = LiveToonSampleEnvironmentReflection(posInput, viewDirectionWS, normalWS, saturate(_ReflectionProbeSmoothness));
+        probeReflection = LiveToonAttenuateLightColor(probeReflection);
+
+        float fresnel = pow(1.0 - saturate(dot(normalize(normalWS), normalize(viewDirectionWS))), 5.0);
+        float reflectionWeight = lerp(0.04, 1.0, fresnel) * reflectionIntensity;
+        environment += probeReflection * reflectionWeight;
+    }
+
+    return environment;
+}
+
+float2 LiveToonWetHash2(float2 value)
+{
+    float2 h = float2(
+        dot(value, float2(127.1, 311.7)),
+        dot(value, float2(269.5, 183.3)));
+    return frac(sin(h) * 43758.5453);
+}
+
+float LiveToonEvaluateSweatMask(float2 uv)
+{
+    float scale = max(1.0, _SweatScale);
+    float2 gridUV = uv * scale;
+    float2 baseCell = floor(gridUV);
+    float mask = 0.0;
+
+    UNITY_UNROLL
+    for (int y = -1; y <= 1; y++)
+    {
+        UNITY_UNROLL
+        for (int x = -1; x <= 1; x++)
+        {
+            float2 cell = baseCell + float2(x, y);
+            float2 randomValue = LiveToonWetHash2(cell);
+            float2 local = gridUV - cell;
+            float fall = _Time.y * _SweatSpeed * lerp(0.2, 1.15, randomValue.x);
+            float2 center = float2(randomValue.x, frac(randomValue.y - fall));
+            float2 p = local - center;
+            p.x *= 1.35;
+            float d = length(p);
+            float radius = lerp(0.075, 0.19, LiveToonWetHash2(cell + 13.7).x);
+            float drop = 1.0 - smoothstep(radius * 0.45, radius, d);
+
+            float trailDown = center.y - local.y;
+            float trailLength = radius * lerp(1.4, 4.8, randomValue.y);
+            float trail = smoothstep(0.0, radius * 0.3, trailDown)
+                * (1.0 - smoothstep(trailLength, trailLength * 1.2, trailDown))
+                * (1.0 - smoothstep(radius * 0.16, radius * 0.62, abs(p.x)));
+
+            mask = max(mask, drop + trail * _SweatTrail);
+        }
+    }
+
+    return saturate(mask);
+}
+
+float3 LiveToonApplyWetSkinOverlays(float3 color, float2 mainUv, float3 viewDirectionWS, float3 normalWS)
+{
+    float sweatIntensity = saturate(_SweatIntensity);
+    if (sweatIntensity > 1.0e-4)
+    {
+        float sweatMask = LiveToonEvaluateSweatMask(mainUv) * sweatIntensity;
+        float viewRim = pow(1.0 - saturate(dot(normalize(viewDirectionWS), normalize(normalWS))), 2.5);
+        float sparkle = saturate(0.2 + viewRim * 1.4) * sweatMask * _SweatHighlight;
+        color = lerp(color, color * lerp(float3(1.0, 1.0, 1.0), _SweatColor.rgb, 0.25), sweatMask * 0.18);
+        color += _SweatColor.rgb * sparkle;
+    }
+
+    float wetHairIntensity = saturate(_WetHairOverlayIntensity);
+    if (wetHairIntensity > 1.0e-4)
+    {
+        float2 overlayUv = TRANSFORM_TEX(mainUv, _WetHairOverlayTex);
+        float4 wetHair = SAMPLE_TEXTURE2D(_WetHairOverlayTex, sampler_WetHairOverlayTex, overlayUv);
+        float wetHairMask = saturate(max(wetHair.a, max(wetHair.r, max(wetHair.g, wetHair.b))) * wetHairIntensity);
+        float3 wetHairColor = lerp(_WetHairOverlayColor.rgb, wetHair.rgb * _WetHairOverlayColor.rgb, step(0.001, max(wetHair.r, max(wetHair.g, wetHair.b))));
+        color = lerp(color, wetHairColor, wetHairMask * _WetHairOverlayColor.a);
+        color += _WetHairOverlayColor.rgb * wetHairMask * _WetHairOverlayGloss * 0.35;
+    }
+
+    return color;
+}
+
 float4 CalculateDirectionalLighting(v2f i, DirectionalLightData directionalLightData, bool useSceneShadow, out float3 rimColor, out float3 specCol)
 {
     // rimColor = float3(1,0,0);
@@ -512,88 +792,9 @@ lightDir *= -1;
 //------------------------------------------------------------
 // Face-light 角度固定処理（Yaw & Pitch）
 //------------------------------------------------------------
-if (_isCharFace == 1)
+if (_isCharFace == 1 && _FaceLightLimitIntensity > EPS_COL)
 {
-    // 顔基準ベクトル
-    float3 faceF = normalize(_FaceForwardDirection.xyz);   // +Z 正面
-    float3 faceU = normalize(_FaceUpDirection.xyz);        // +Y 上
-    float3 faceR = normalize(cross(faceU, faceF));         // +X 右
-
-    // lightDir = faceF;
-
-    // ライト→ピクセル方向
-    float3 L = normalize(lightDir);
-
-    // 顔→ライト方向
-    float3 toLight = -L;
-
-    float yawRad   = atan2(dot(faceR, toLight), dot(faceF, toLight));  // [-π, π]
-    float pitchRad = asin(clamp(dot(faceU, toLight), -1.0, 1.0));      // [-π/2, π/2]
-
-    #define MAX_YAW_RULES 7
-
-    static const float yawMinList[MAX_YAW_RULES] = {
-        radians(-180.0), 
-        radians(-120.0), 
-        radians(-60.0),  
-        radians(-15.0),  
-        radians(15.0),   
-        radians(60.0),   
-        radians(120.0)   
-    };
-
-    static const float yawMaxList[MAX_YAW_RULES] = {
-        radians(-120.0),
-        radians(-60.0),
-        radians(-15.0),
-        radians(15.0),
-        radians(60.0),
-        radians(120.0),
-        radians(180.0)
-    };
-
-    static const float yawFixedList[MAX_YAW_RULES] = {
-        radians(-140.0),
-        radians(-90.0),
-        radians(-45.0),
-        radians(0.0),
-        radians(45.0),
-        radians(90.0),
-        radians(140.0)
-    };
-
-    float closestYaw = yawFixedList[0];
-    float minDist = abs(yawRad - yawFixedList[0]);
-
-    for (int i = 1; i < MAX_YAW_RULES; i++)
-    {
-        float d = abs(yawRad - yawFixedList[i]);
-        if (d < minDist)
-        {
-            minDist = d;
-            closestYaw = yawFixedList[i];
-        }
-    }
-
-    float blendZone = radians(40.0);  // 補正が効き始める距離
-    float blendWeight = saturate(1.0 - minDist / blendZone);
-    blendWeight = smoothstep(0.0, 1.0, blendWeight); // S字補完
-
-
-    yawRad = lerp(yawRad, closestYaw, blendWeight);
-
-    const float pitchLimit = radians(110.0);
-    if (abs(pitchRad) <= pitchLimit)
-        pitchRad = 0.0;
-
-    float cosP = cos(pitchRad);
-    float3 toLightFix =
-        faceF * cosP * cos(yawRad) +   // 前後
-        faceR * cosP * sin(yawRad) +   // 左右
-        faceU * sin(pitchRad);         // 上下
-
-    // lightDir を補正方向に置き換え
-    lightDir = normalize(-toLightFix);
+    lightDir = LiveToonLimitFaceLightDirection(lightDir);
 }
 
 float3 V = normalize(worldView);
@@ -707,10 +908,13 @@ else
 {
     shadowAttenuation = 1;
 }
-if(_isFace == 1) {
+
+float hairSpecDirectionalShadow = saturate(shadowAttenuation);
+
+if(_isFace > 0.5) {
     shadowAttenuation = 1;
 }
-if(_isHair == 1) {
+if(_isHair > 0.5) {
     shadowAttenuation = 1;
 }
 // SampleOneLight(
@@ -723,8 +927,11 @@ if(_isHair == 1) {
 //     inRange, atten, uv
 // );
 float shadowMul = 1.0;
+float shadowDebugInRange = 0.0;
+float shadowDebugCasterSilhouette = 0.0;
 
 float3 absWS = ToAbsoluteWorld(i.posWorld); // ★ここが肝
+shadowMul *= LiveToonSampleBoxShadow(absWS);
 
 if (_VirtualLightCount > 0)
 {
@@ -735,6 +942,10 @@ if (_VirtualLightCount > 0)
         _ShadowBias, _ProjectFlipU0, _ProjectFlipV0,
         inRange, atten, uv);
 
+    shadowDebugInRange = max(shadowDebugInRange, inRange);
+    float debugCasterDepth0 = SAMPLE_TEXTURE2D(_HairShadowMap0, sampler_HairShadowMap0, saturate(uv)).r;
+    float debugCasterRange0 = max(inRange, saturate(_LiveToonFrontHairShadowDebugIgnoreProjection));
+    shadowDebugCasterSilhouette = max(shadowDebugCasterSilhouette, (debugCasterDepth0 < 0.999 ? 1.0 : 0.0) * debugCasterRange0);
     shadowMul *= lerp(1.0, atten, _ShadowStrength * inRange);
 }
 
@@ -747,6 +958,10 @@ if (_VirtualLightCount > 1)
         _ShadowBias, _ProjectFlipU1, _ProjectFlipV1,
         inRange, atten, uv);
 
+    shadowDebugInRange = max(shadowDebugInRange, inRange);
+    float debugCasterDepth1 = SAMPLE_TEXTURE2D(_HairShadowMap1, sampler_HairShadowMap0, saturate(uv)).r;
+    float debugCasterRange1 = max(inRange, saturate(_LiveToonFrontHairShadowDebugIgnoreProjection));
+    shadowDebugCasterSilhouette = max(shadowDebugCasterSilhouette, (debugCasterDepth1 < 0.999 ? 1.0 : 0.0) * debugCasterRange1);
     shadowMul *= lerp(1.0, atten, _ShadowStrength * inRange);
 }
 
@@ -759,6 +974,10 @@ if (_VirtualLightCount > 2)
         _ShadowBias, _ProjectFlipU2, _ProjectFlipV2,
         inRange, atten, uv);
 
+    shadowDebugInRange = max(shadowDebugInRange, inRange);
+    float debugCasterDepth2 = SAMPLE_TEXTURE2D(_HairShadowMap2, sampler_HairShadowMap0, saturate(uv)).r;
+    float debugCasterRange2 = max(inRange, saturate(_LiveToonFrontHairShadowDebugIgnoreProjection));
+    shadowDebugCasterSilhouette = max(shadowDebugCasterSilhouette, (debugCasterDepth2 < 0.999 ? 1.0 : 0.0) * debugCasterRange2);
     shadowMul *= lerp(1.0, atten, _ShadowStrength * inRange);
 }
 
@@ -771,7 +990,19 @@ if (_VirtualLightCount > 3)
         _ShadowBias, _ProjectFlipU3, _ProjectFlipV3,
         inRange, atten, uv);
 
+    shadowDebugInRange = max(shadowDebugInRange, inRange);
+    float debugCasterDepth3 = SAMPLE_TEXTURE2D(_HairShadowMap3, sampler_HairShadowMap0, saturate(uv)).r;
+    float debugCasterRange3 = max(inRange, saturate(_LiveToonFrontHairShadowDebugIgnoreProjection));
+    shadowDebugCasterSilhouette = max(shadowDebugCasterSilhouette, (debugCasterDepth3 < 0.999 ? 1.0 : 0.0) * debugCasterRange3);
     shadowMul *= lerp(1.0, atten, _ShadowStrength * inRange);
+}
+
+if (_LiveToonFrontHairShadowDebugForce > 0.5)
+{
+    float debugRange = _LiveToonFrontHairShadowDebugUseCasterSilhouette > 0.5
+        ? shadowDebugCasterSilhouette
+        : max(shadowDebugInRange, saturate(_LiveToonFrontHairShadowDebugIgnoreProjection));
+    shadowMul = min(shadowMul, lerp(1.0, saturate(_LiveToonFrontHairShadowDebugAttenuation), debugRange));
 }
 
 
@@ -847,12 +1078,11 @@ half3 col = lerp(shade.rgb, lit.rgb, lightIntensity);
     half overlayW = saturate((_LambertThresh - uNormDot) / _GradWidth);
 
     // オーバーレイ用の色を生成
+    half boundarySaturationStrength = max(_Sat, 0.0h);
     half3 hsv  = RgbToHsv(lightColor);
-    hsv.y     *= 3.5;                      // 彩度ブースト
-    // 彩度が上がりすぎたらおさえる
-    if(hsv.y > 0.8) {
-        hsv.y = 0.8;
-    }
+    hsv.y     *= lerp(1.0h, 3.5h, saturate(boundarySaturationStrength));
+    hsv.y     *= max(1.0h, boundarySaturationStrength);
+    hsv.y      = min(hsv.y, lerp(0.8h, 1.0h, saturate(boundarySaturationStrength - 1.0h)));
     half3 ovIn = HsvToRgb(hsv);
     // return float4(ovIn, 1);
 
@@ -888,10 +1118,10 @@ half3 col = lerp(shade.rgb, lit.rgb, lightIntensity);
     }
 
     specCol = 0;
-if (_isHair == 1) {
+if (_isHair > 0.5) {
     // float3 Nw = worldNormal;
-    float3 V_tmp = worldView;
-    float3 L_tmp = lightDir;
+    float3 V_tmp = normalize(worldView);
+    float3 L_tmp = normalize(lightDir);
     
 // Tangent, Bitangent をそれぞれ列方向で復元
 float3 T = float3(i.tspace0.x, i.tspace1.x, i.tspace2.x);
@@ -945,8 +1175,8 @@ if(specNdL < 0) {
 }
 
 // float specMask = smoothstep(0.5, 1, lightIntensity) * specNdL;
-// specMask = 1;
-specCol *= specNdL;
+float specShadowMask = smoothstep(0.05, 0.95, hairSpecDirectionalShadow);
+specCol *= specNdL * specShadowMask;
 // specCol += specNdL;
 
 /* --- 異方性ハイライト + ジッター ここまで ---------------------- */
@@ -955,7 +1185,9 @@ specCol *= specNdL;
 
 
     // return float4(lightIntensity01, lightIntensity01, lightIntensity01, 1);
-    col = lerp(col, ovCol, lightIntensity01);
+    half boundarySaturationWeight = LiveToonBoundarySaturationWeight(col, lightIntensity01, alpha, boundarySaturationStrength);
+    ovCol = LiveToonPreventBoundaryDarkening(col, ovCol);
+    col = lerp(col, ovCol, boundarySaturationWeight);
     
     col = min(col, lit); // comment out if you want to PBR absolutely.
 #endif
@@ -1528,6 +1760,10 @@ float alpha = RTD_TRAN_OPA_Sli;
 uint2 tileIndex = uint2(i.pos.xy) / GetTileSize();
                 PositionInputs posInput = GetPositionInput(i.pos.xy, _ScreenSize.zw, i.pos.z, i.pos.w, i.posWorld.xyz, tileIndex);
                 float3 viewDirection = GetWorldSpaceNormalizeViewDir(i.posWorld);
+                float3 environmentNormalWS = normalize(i.normalWS);
+                float3 environmentBaseColor = mainTex.rgb * _Color.rgb;
+                result.rgb += LiveToonEvaluateEnvironmentLighting(posInput, viewDirection, environmentNormalWS, environmentBaseColor);
+                result.rgb = LiveToonApplyWetSkinOverlays(result.rgb, i.uv0, viewDirection, environmentNormalWS);
     
 	//  UNITY_APPLY_FOG(i.fogCoord, result);に相当する処理
 

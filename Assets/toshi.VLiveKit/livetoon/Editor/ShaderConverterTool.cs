@@ -59,6 +59,9 @@ namespace VLiveKit.LiveToon.Editor
         private const string KeyOutlineColorFixed = "MTOON_OUTLINE_COLOR_FIXED";
         private const string KeyOutlineColorMixed = "MTOON_OUTLINE_COLOR_MIXED";
         private const int TransparentWithZWriteQueue = 2501;
+        private const float DefaultIndirectLightIntensity = 0.35f;
+        private const float DefaultReflectionProbeIntensity = 0.25f;
+        private const float DefaultReflectionProbeSmoothness = 0.35f;
         private static readonly float BlendZero = (float)UnityEngine.Rendering.BlendMode.Zero;
         private static readonly float BlendOne = (float)UnityEngine.Rendering.BlendMode.One;
         private static readonly float BlendSrcAlpha = (float)UnityEngine.Rendering.BlendMode.SrcAlpha;
@@ -354,6 +357,15 @@ namespace VLiveKit.LiveToon.Editor
             ApplyRenderModeState(material, blendMode);
             RestoreOutlineProperties(material, outlineState);
             ApplyOutlineModeState(material);
+            ApplyEnvironmentLightingDefaults(material);
+            LiveToonDefaultAssets.EnsureDefaultJitterTexture(material);
+        }
+
+        private static void ApplyEnvironmentLightingDefaults(Material material)
+        {
+            SetFloatIfPresent(material, "_IndirectLightIntensity", DefaultIndirectLightIntensity);
+            SetFloatIfPresent(material, "_ReflectionProbeIntensity", DefaultReflectionProbeIntensity);
+            SetFloatIfPresent(material, "_ReflectionProbeSmoothness", DefaultReflectionProbeSmoothness);
         }
 
         private static LiveToonOutlineMaterialState CaptureOutlineState(Material material)

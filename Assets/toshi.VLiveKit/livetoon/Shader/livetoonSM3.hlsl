@@ -38,6 +38,67 @@ float _AntiPerspHeight = 1.5;   // 最大補正になる高さ
     float4 positionObject = mul(Inverse(GetObjectToWorldMatrix()), positionWorld);
     ObjectSpacePos_IN     = positionObject.xyz;
 }
+#ifndef VLIVEKIT_LIVETOON_PERSPECTIVE_CORRECTION_INCLUDED
+#define VLIVEKIT_LIVETOON_PERSPECTIVE_CORRECTION_INCLUDED
+float3 ApplyLiveToonPerspectiveCorrectionOS(float3 positionOS)
+{
+    float intensity = saturate(_LiveToonPerspectiveCorrectionIntensity);
+    if (intensity <= 1.0e-4)
+    {
+        return positionOS;
+    }
+
+    float3 positionRWS = TransformObjectToWorld(positionOS);
+    float3 positionWS = GetAbsolutePositionWS(positionRWS);
+    float height = saturate((positionWS.y - _LiveToonPerspectiveCorrectionGroundY) / max(_LiveToonPerspectiveCorrectionHeight, 1.0e-4));
+    height = pow(height, max(_LiveToonPerspectiveCorrectionHeightPower, 1.0e-4));
+    float weight = intensity * height;
+    if (weight <= 1.0e-4)
+    {
+        return positionOS;
+    }
+
+    float3 centerRWS = GetCameraRelativePositionWS(_LiveToonPerspectiveCorrectionCenterWS.xyz);
+    float4 positionCS = TransformWorldToHClip(positionRWS);
+    float4 centerCS = TransformWorldToHClip(centerRWS);
+    float centerW = max(abs(centerCS.w), 1.0e-4);
+    float correction = abs(positionCS.w) / centerW;
+    float2 correctedXY = centerCS.xy + (positionCS.xy - centerCS.xy) * correction;
+    positionCS.xy = lerp(positionCS.xy, correctedXY, weight);
+
+    float4 correctedRWS = mul(Inverse(GetWorldToHClipMatrix()), positionCS);
+    if (abs(correctedRWS.w) > 1.0e-4)
+    {
+        correctedRWS.xyz /= correctedRWS.w;
+    }
+
+    return TransformWorldToObject(correctedRWS.xyz);
+}
+#endif
+
+float3 ApplyLiveToonSphericalNormalOS(float3 positionOS, float3 normalOS)
+{
+    float intensity = saturate(_FaceSphereIntensity);
+    if (_isCharFace < 0.5 || intensity <= 1.0e-4)
+    {
+        return normalize(normalOS);
+    }
+
+    float3 sphereNormalOS = positionOS - _FacePosition.xyz;
+    if (dot(sphereNormalOS, sphereNormalOS) <= 1.0e-6)
+    {
+        return normalize(normalOS);
+    }
+
+    sphereNormalOS = normalize(sphereNormalOS);
+    if (dot(sphereNormalOS, normalOS) < 0.0)
+    {
+        sphereNormalOS = -sphereNormalOS;
+    }
+
+    return normalize(lerp(normalize(normalOS), sphereNormalOS, intensity));
+}
+
 v2f LitPassVertex( appdata_full v)
 {
     // UNITY_SETUP_INSTANCE_ID (v);
@@ -46,24 +107,8 @@ v2f LitPassVertex( appdata_full v)
         // AntiPerspective(_FacePosition.xyz);
     // v.vertex.z += -0.02 * v.vertex.w;
     // v.vertex.xyz += float3(1.0, 0.0, 0.0);
-    v.normal = normalize(v.normal);
-
-if (_isCharFace == 1)
-{
-    // オブジェクト空間で計算→ワールド空間に変換
-    float3 worldPos = mul(GetWorldToObjectMatrix(), v.vertex.xyz);
-    float3 sphereWorldNorm = normalize(worldPos - _FacePosition.xyz);
-
-    // 裏返り防止
-    // if (dot(v.normal, sphereObjNorm) < 0)
-    //     sphereObjNorm = -sphereObjNorm;
-
-// ワールドノーマルをオブジェクトスペースに変換
-float3 objectNormal = mul((float3x3)UNITY_MATRIX_I_M, sphereWorldNorm);
-
-    // ブレンド
-    v.normal = normalize(lerp(v.normal, objectNormal, _FaceSphereIntensity));
-}
+    v.normal = ApplyLiveToonSphericalNormalOS(v.vertex.xyz, v.normal);
+    v.vertex.xyz = ApplyLiveToonPerspectiveCorrectionOS(v.vertex.xyz);
 
 
     // if ( _isFace == 1) {
@@ -85,7 +130,8 @@ v2f LitPassVertex_Outline(appdata_full v)
     // AntiPerspective(v.vertex.xyz);
     // v.vertex.z += -0.01 * v.vertex.w;
     // v.vertex.xyz += float3(1.0, 0.0, 0.0);
-    v.normal = normalize(v.normal);
+    v.normal = ApplyLiveToonSphericalNormalOS(v.vertex.xyz, v.normal);
+    v.vertex.xyz = ApplyLiveToonPerspectiveCorrectionOS(v.vertex.xyz);
     float4 result = CalculateOutlineVertexClipPosition(v);
     return InitializeV2F(v, result, 1);
 }

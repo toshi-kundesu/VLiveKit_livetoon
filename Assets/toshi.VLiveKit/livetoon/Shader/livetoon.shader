@@ -21,10 +21,22 @@ Shader "toshi/VLiveKit/livetoon"
         _ShadeShift ("Shade Shift", Range(-1, 1)) = 0
         _ShadeToony ("Shade Toony", Range(0, 1)) = 0.9
         _LightColorAttenuation ("Light Color Attenuation", Range(0, 1)) = 0
-        _IndirectLightIntensity ("Indirect Light Intensity", Range(0, 1)) = 0.1
+        _IndirectLightIntensity ("Indirect Light Intensity", Range(0, 1)) = 0.35
+        _ReflectionProbeIntensity ("Reflection Probe Intensity", Range(0, 2)) = 0.25
+        _ReflectionProbeSmoothness ("Reflection Probe Smoothness", Range(0, 1)) = 0.35
         _PunctualLightIntensity ("Punctual Light Intensity", Range(0, 2)) = 1
         _FallbackLightIntensity ("Fallback Light Intensity", Range(0, 2)) = 1
         [HDR] _FallbackLightColor ("Fallback Light Color", Color) = (1,1,1,1)
+        _SweatIntensity ("Sweat Intensity", Range(0, 1)) = 0
+        _SweatScale ("Sweat Scale", Range(4, 80)) = 28
+        _SweatSpeed ("Sweat Speed", Range(0, 2)) = 0.35
+        _SweatHighlight ("Sweat Highlight", Range(0, 2)) = 0.7
+        _SweatTrail ("Sweat Trail", Range(0, 1)) = 0.35
+        [HDR] _SweatColor ("Sweat Color", Color) = (1,1,1,1)
+        _WetHairOverlayTex ("Wet Hair Overlay Texture", 2D) = "black" {}
+        [HDR] _WetHairOverlayColor ("Wet Hair Overlay Color", Color) = (0.035,0.028,0.02,1)
+        _WetHairOverlayIntensity ("Wet Hair Overlay Intensity", Range(0, 1)) = 0
+        _WetHairOverlayGloss ("Wet Hair Overlay Gloss", Range(0, 1)) = 0.35
         [HDR] _RimColor ("Rim Color", Color) = (0,0,0)
         [NoScaleOffset] _RimTexture ("Rim Texture", 2D) = "white" {}
         _RimLightingMix ("Rim Lighting Mix", Range(0, 1)) = 0
@@ -67,7 +79,7 @@ Shader "toshi/VLiveKit/livetoon"
         _LambertThresh ("LambertThresh", Float) = 0.5
         _GradWidth     ("ShadowWidth", Range(0.003,1)) = 0.1
         // _Sat           ("Sat", Range(0,2)) = 1
-        _Sat           ("Sat", Float) = 0.5
+        _Sat           ("Sat", Float) = 1
 
         _Distance("Distance", Range(0, 2)) = 0.95
         // _Distance("Distance", Float) = 0.1
@@ -76,6 +88,24 @@ Shader "toshi/VLiveKit/livetoon"
         _Size("Size", Range(0, 2)) = 1.1
         // _Size("Size", Float) = 0.01
         _AntiPerspectiveIntensity("AntiPerspectiveIntensity", Range(0, 1)) = 0.1
+        [HideInInspector] _LiveToonPerspectiveCorrectionIntensity("LiveToon Perspective Correction Intensity", Range(0, 1)) = 0
+        [HideInInspector] _LiveToonPerspectiveCorrectionCenterWS("LiveToon Perspective Correction Center WS", Vector) = (0,0,0,0)
+        [HideInInspector] _LiveToonPerspectiveCorrectionGroundY("LiveToon Perspective Correction Ground Y", Float) = 0
+        [HideInInspector] _LiveToonPerspectiveCorrectionHeight("LiveToon Perspective Correction Height", Float) = 1.5
+        [HideInInspector] _LiveToonPerspectiveCorrectionHeightPower("LiveToon Perspective Correction Height Power", Float) = 1
+        [HideInInspector] _LiveToonBoxShadowEnabled("LiveToon Box Shadow Enabled", Float) = 0
+        [HideInInspector] _LiveToonBoxShadowMap("LiveToon Box Shadow Map", 2D) = "white" {}
+        [HideInInspector] _LiveToonBoxShadowStrength("LiveToon Box Shadow Strength", Range(0, 1)) = 1
+        [HideInInspector] _LiveToonBoxShadowBias("LiveToon Box Shadow Bias", Float) = 0.003
+        [HideInInspector] _LiveToonBoxShadowUseDepth("LiveToon Box Shadow Use Depth", Float) = 0
+        [HideInInspector] _LiveToonBoxShadowSilhouetteAttenuation("LiveToon Box Shadow Silhouette Attenuation", Range(0, 1)) = 0.12
+        [HideInInspector] _LiveToonBoxShadowFlipU("LiveToon Box Shadow Flip U", Float) = 0
+        [HideInInspector] _LiveToonBoxShadowFlipV("LiveToon Box Shadow Flip V", Float) = 1
+        [HideInInspector] _LiveToonBoxShadowInvertSilhouette("LiveToon Box Shadow Invert Silhouette", Float) = 0
+        [HideInInspector] _FaceLightLimitIntensity("Face Light Limit Intensity", Range(0, 1)) = 0
+        [HideInInspector] _FaceLightYawStep("Face Light Yaw Step", Range(1, 180)) = 45
+        [HideInInspector] _FaceLightYawStickyRange("Face Light Yaw Sticky Range", Range(0, 0.95)) = 0.45
+        [HideInInspector] _FaceLightPitchFlatten("Face Light Pitch Flatten", Range(0, 1)) = 1
 
         // mat.SetVector("_FaceForwardDirection", fwd);
         //     mat.SetVector("_FaceUpDirection",      up);
@@ -103,7 +133,7 @@ Shader "toshi/VLiveKit/livetoon"
         _Intensity("Intensity", Float) = 0.5
         _Position("Position", Float) = 0.3
 
-        _JitterTex("JitterTex", 2D) = "white" {}
+        _JitterTex("JitterTex", 2D) = "gray" {}
         _JitterIntensity("JitterIntensity", Float) = 0.5
     }
 
@@ -157,9 +187,21 @@ uniform float _ShadeShift;
 uniform float _ShadeToony;
 uniform float _LightColorAttenuation;
 uniform float _IndirectLightIntensity;
+uniform float _ReflectionProbeIntensity;
+uniform float _ReflectionProbeSmoothness;
 uniform float _PunctualLightIntensity;
 uniform float _FallbackLightIntensity;
 uniform float4 _FallbackLightColor;
+uniform float _SweatIntensity;
+uniform float _SweatScale;
+uniform float _SweatSpeed;
+uniform float _SweatHighlight;
+uniform float _SweatTrail;
+uniform float4 _SweatColor;
+uniform float4 _WetHairOverlayTex_ST;
+uniform float4 _WetHairOverlayColor;
+uniform float _WetHairOverlayIntensity;
+uniform float _WetHairOverlayGloss;
 
 uniform float4 _RimColor;
 uniform float4 _RimTexture_ST;
@@ -249,6 +291,15 @@ float  _Distance;
 float  _Focal;
 float  _Size;
 float  _AntiPerspectiveIntensity;
+float  _LiveToonPerspectiveCorrectionIntensity;
+float3 _LiveToonPerspectiveCorrectionCenterWS;
+float  _LiveToonPerspectiveCorrectionGroundY;
+float  _LiveToonPerspectiveCorrectionHeight;
+float  _LiveToonPerspectiveCorrectionHeightPower;
+float  _FaceLightLimitIntensity;
+float  _FaceLightYawStep;
+float  _FaceLightYawStickyRange;
+float  _FaceLightPitchFlatten;
 
 float3 _FaceForwardDirection;
 float3 _FaceUpDirection;
@@ -307,6 +358,9 @@ SAMPLER(sampler_SphereAdd);
 TEXTURE2D(_EmissionMap);
 SAMPLER(sampler_EmissionMap);
 
+TEXTURE2D(_WetHairOverlayTex);
+SAMPLER(sampler_WetHairOverlayTex);
+
 TEXTURE2D(_RembrandLightingMask);
 SAMPLER(sampler_RembrandLightingMask);
 
@@ -328,6 +382,44 @@ SAMPLER(sampler_HeightMap);
 
 TEXTURE2D(_JitterTex);
 SAMPLER(sampler_JitterTex);
+
+#ifndef VLIVEKIT_LIVETOON_PERSPECTIVE_CORRECTION_INCLUDED
+#define VLIVEKIT_LIVETOON_PERSPECTIVE_CORRECTION_INCLUDED
+float3 ApplyLiveToonPerspectiveCorrectionOS(float3 positionOS)
+{
+    float intensity = saturate(_LiveToonPerspectiveCorrectionIntensity);
+    if (intensity <= 1.0e-4)
+    {
+        return positionOS;
+    }
+
+    float3 positionRWS = TransformObjectToWorld(positionOS);
+    float3 positionWS = GetAbsolutePositionWS(positionRWS);
+    float height = saturate((positionWS.y - _LiveToonPerspectiveCorrectionGroundY) / max(_LiveToonPerspectiveCorrectionHeight, 1.0e-4));
+    height = pow(height, max(_LiveToonPerspectiveCorrectionHeightPower, 1.0e-4));
+    float weight = intensity * height;
+    if (weight <= 1.0e-4)
+    {
+        return positionOS;
+    }
+
+    float3 centerRWS = GetCameraRelativePositionWS(_LiveToonPerspectiveCorrectionCenterWS.xyz);
+    float4 positionCS = TransformWorldToHClip(positionRWS);
+    float4 centerCS = TransformWorldToHClip(centerRWS);
+    float centerW = max(abs(centerCS.w), 1.0e-4);
+    float correction = abs(positionCS.w) / centerW;
+    float2 correctedXY = centerCS.xy + (positionCS.xy - centerCS.xy) * correction;
+    positionCS.xy = lerp(positionCS.xy, correctedXY, weight);
+
+    float4 correctedRWS = mul(Inverse(GetWorldToHClipMatrix()), positionCS);
+    if (abs(correctedRWS.w) > 1.0e-4)
+    {
+        correctedRWS.xyz /= correctedRWS.w;
+    }
+
+    return TransformWorldToObject(correctedRWS.xyz);
+}
+#endif
 
 struct LiveToonDepthAttributes
 {
@@ -354,7 +446,7 @@ LiveToonDepthVaryings LiveToonDepthVertex(LiveToonDepthAttributes input)
     UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
     output.uv = input.texcoord;
-    output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+    output.positionCS = TransformObjectToHClip(ApplyLiveToonPerspectiveCorrectionOS(input.positionOS.xyz));
     return output;
 }
 
@@ -786,7 +878,8 @@ float4 ComputeScreenPos(float4 positionCS)
 float4 GetShadowPositionHClip(Attributes input, float3 normalWS)
 {
 
-	float3 positionWS = TransformObjectToWorld(input.positionOS.xyz);
+	float3 positionOS = ApplyLiveToonPerspectiveCorrectionOS(input.positionOS.xyz);
+	float3 positionWS = TransformObjectToWorld(positionOS);
 
 	float invNdotL = 1.0 - saturate(dot(_LightDirection, positionWS));
 	float scale = invNdotL * _ShadowBias.y;
@@ -821,8 +914,9 @@ Varyings ShadowPassVertex(Attributes input)
 
     output.normalWS = TransformObjectToWorldDir(input.normalOS);
     output.tangentWS = float4(TransformObjectToWorldDir(input.tangentOS.xyz), input.tangentOS.w);
-	output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
-    output.positionCS = TransformWorldToHClip(TransformObjectToWorld(input.positionOS.xyz));
+	float3 positionOS = ApplyLiveToonPerspectiveCorrectionOS(input.positionOS.xyz);
+	output.positionWS = TransformObjectToWorld(positionOS);
+    output.positionCS = TransformWorldToHClip(output.positionWS);
 		
     output.projPos = ComputeScreenPos (output.positionCS);
 	output.positionCS = GetShadowPositionHClip(input, output.normalWS);
@@ -942,7 +1036,7 @@ Tags{"LightMode"="DepthOnly"}
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
                 output.uv = input.texcoord;
-                output.positionCS = TransformObjectToHClip(input.positionOS.xyz);
+                output.positionCS = TransformObjectToHClip(ApplyLiveToonPerspectiveCorrectionOS(input.positionOS.xyz));
                 return output;
             }
 
@@ -1189,6 +1283,6 @@ Tags{"LightMode"="SRPDefaultUnlit"}
     //
 
 FallBack "Hidden/InternalErrorShader"
-CustomEditor "MToon.MToonInspector"
+CustomEditor "toshi.VLiveKit.livetoon.Editor.LiveToonInspector_MToonBase"
 
 }
