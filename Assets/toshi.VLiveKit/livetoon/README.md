@@ -5,7 +5,7 @@
 ## Package
 
 - Package name: `com.toshi.vlivekit.livetoon`
-- Version: `0.1.3`
+- Version: `0.1.4`
 - Unity: 2022.3
 - Repository: https://github.com/toshi-kundesu/VLiveKit_LiveToon
 - Package root: `Assets/toshi.VLiveKit/livetoon`
@@ -29,7 +29,7 @@ Unity の `Packages/manifest.json` の `dependencies` に追加します。
 ```json
 {
   "dependencies": {
-    "com.toshi.vlivekit.livetoon": "0.1.3"
+    "com.toshi.vlivekit.livetoon": "0.1.4"
   }
 }
 ```
