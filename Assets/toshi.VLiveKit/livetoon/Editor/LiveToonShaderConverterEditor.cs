@@ -9,6 +9,7 @@ namespace VLiveKit.LiveToon.Editor
     {
         private SerializedProperty targetObjectProperty;
         private SerializedProperty shaderToUseProperty;
+        private SerializedProperty conversionSourceProperty;
         private SerializedProperty createMaterialBackupsProperty;
         private SerializedProperty disableOutlineOnConvertProperty;
 
@@ -16,6 +17,7 @@ namespace VLiveKit.LiveToon.Editor
         {
             targetObjectProperty = serializedObject.FindProperty("targetObject");
             shaderToUseProperty = serializedObject.FindProperty("shaderToUse");
+            conversionSourceProperty = serializedObject.FindProperty("conversionSource");
             createMaterialBackupsProperty = serializedObject.FindProperty("createMaterialBackups");
             disableOutlineOnConvertProperty = serializedObject.FindProperty("disableOutlineOnConvert");
         }
@@ -26,6 +28,7 @@ namespace VLiveKit.LiveToon.Editor
 
             EditorGUILayout.PropertyField(targetObjectProperty);
             EditorGUILayout.PropertyField(shaderToUseProperty);
+            EditorGUILayout.PropertyField(conversionSourceProperty);
             EditorGUILayout.PropertyField(createMaterialBackupsProperty, new GUIContent("Also Create Legacy Backups"));
             EditorGUILayout.PropertyField(disableOutlineOnConvertProperty, new GUIContent("Disable Outline After Convert"));
 
@@ -76,7 +79,8 @@ namespace VLiveKit.LiveToon.Editor
                     converter.TargetObject,
                     converter.ShaderToUse,
                     converter.CreateMaterialBackups,
-                    converter.DisableOutlineOnConvert);
+                    converter.DisableOutlineOnConvert,
+                    converter.ConversionSource);
                 Debug.Log(result.ToConversionLog(), converter);
             }
         }

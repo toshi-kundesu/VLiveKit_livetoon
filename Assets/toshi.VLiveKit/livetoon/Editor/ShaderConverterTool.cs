@@ -52,6 +52,9 @@ namespace VLiveKit.LiveToon.Editor
         private const string ConvertedSuffix = "_LiveToon";
         private const string GeneratedMaterialsDirectory = "Assets/VLiveKitGenerated/LiveToonMaterials";
         private const string SourceMaterialPathPrefix = "VLiveKit.LiveToon.SourceMaterialPath=";
+        private const string SourceMaterialGlobalObjectIdPrefix = "VLiveKit.LiveToon.SourceMaterialGlobalObjectId=";
+        private const string SourceMaterialNamePrefix = "VLiveKit.LiveToon.SourceMaterialName=";
+        private const string SourceMaterialShaderNamePrefix = "VLiveKit.LiveToon.SourceMaterialShaderName=";
         private const string TransparentDepthPrepassName = "TransparentDepthPrepass";
         private const string TransparentDepthPostpassName = "TransparentDepthPostpass";
         private const string KeyOutlineWidthWorld = "MTOON_OUTLINE_WIDTH_WORLD";
@@ -62,6 +65,7 @@ namespace VLiveKit.LiveToon.Editor
         private const float DefaultIndirectLightIntensity = 0.35f;
         private const float DefaultReflectionProbeIntensity = 0.25f;
         private const float DefaultReflectionProbeSmoothness = 0.35f;
+        private const float MmdOutlineWidthScale = 100f;
         private static readonly char[] AdditionalInvalidAssetFileNameChars = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
         private static readonly float BlendZero = (float)UnityEngine.Rendering.BlendMode.Zero;
         private static readonly float BlendOne = (float)UnityEngine.Rendering.BlendMode.One;
@@ -71,6 +75,7 @@ namespace VLiveKit.LiveToon.Editor
 
         private GameObject selectedObject;
         private Shader shaderToUse;
+        private LiveToonShaderConversionSource conversionSource;
         private bool createMaterialBackups;
         private bool disableOutlineOnConvert;
 
@@ -93,6 +98,7 @@ namespace VLiveKit.LiveToon.Editor
             EditorGUILayout.LabelField("Base Settings", EditorStyles.boldLabel);
             selectedObject = (GameObject)EditorGUILayout.ObjectField("Selected Object", selectedObject, typeof(GameObject), true);
             shaderToUse = (Shader)EditorGUILayout.ObjectField("Shader To Use", shaderToUse, typeof(Shader), false);
+            conversionSource = (LiveToonShaderConversionSource)EditorGUILayout.EnumPopup("Conversion Source", conversionSource);
 
             EditorGUILayout.Space();
             createMaterialBackups = EditorGUILayout.ToggleLeft("Also create legacy backup copies", createMaterialBackups);
@@ -135,7 +141,7 @@ namespace VLiveKit.LiveToon.Editor
                 return;
             }
 
-            var result = ConvertShadersForObject(selectedObject, shaderToUse, createMaterialBackups, disableOutlineOnConvert);
+            var result = ConvertShadersForObject(selectedObject, shaderToUse, createMaterialBackups, disableOutlineOnConvert, conversionSource);
             ShowNotification(new GUIContent($"Converted {result.ConvertedCount}, assigned {result.AssignedCount}"));
             Debug.Log(result.ToConversionLog());
         }
@@ -171,6 +177,21 @@ namespace VLiveKit.LiveToon.Editor
             Shader targetShader,
             bool createMaterialBackups,
             bool disableOutlineOnConvert)
+        {
+            return ConvertShadersForObject(
+                root,
+                targetShader,
+                createMaterialBackups,
+                disableOutlineOnConvert,
+                LiveToonShaderConversionSource.MToon);
+        }
+
+        internal static LiveToonMaterialConversionResult ConvertShadersForObject(
+            GameObject root,
+            Shader targetShader,
+            bool createMaterialBackups,
+            bool disableOutlineOnConvert,
+            LiveToonShaderConversionSource conversionSource)
         {
             var result = new LiveToonMaterialConversionResult();
             if (root == null || targetShader == null)
@@ -217,7 +238,7 @@ namespace VLiveKit.LiveToon.Editor
                             continue;
                         }
 
-                        ConvertMaterialLikeLoadModel(convertedMaterial, targetShader);
+                        ConvertMaterial(convertedMaterial, targetShader, conversionSource);
                         if (disableOutlineOnConvert)
                         {
                             DisableOutline(convertedMaterial);
@@ -330,6 +351,22 @@ namespace VLiveKit.LiveToon.Editor
             return result;
         }
 
+        private static void ConvertMaterial(
+            Material material,
+            Shader targetShader,
+            LiveToonShaderConversionSource conversionSource)
+        {
+            switch (conversionSource)
+            {
+                case LiveToonShaderConversionSource.MMD4Mecanim:
+                    ConvertMaterialFromMmd4Mecanim(material, targetShader);
+                    break;
+                default:
+                    ConvertMaterialLikeLoadModel(material, targetShader);
+                    break;
+            }
+        }
+
         private static void ConvertMaterialLikeLoadModel(Material material, Shader targetShader)
         {
             var blendMode = GetFloat(material, "_BlendMode", 0f);
@@ -360,6 +397,285 @@ namespace VLiveKit.LiveToon.Editor
             ApplyOutlineModeState(material);
             ApplyEnvironmentLightingDefaults(material);
             LiveToonDefaultAssets.EnsureDefaultJitterTexture(material);
+        }
+
+        private static void ConvertMaterialFromMmd4Mecanim(Material material, Shader targetShader)
+        {
+            var materialName = GetMmdSourceMaterialName(material);
+            var sourceShaderName = GetMmdSourceShaderName(material);
+            var sourceRenderQueue = GetMmdRenderQueue(material);
+            var blendMode = GetMmdBlendMode(material, materialName, sourceShaderName);
+            var color = GetMmdBaseColor(material);
+            var shadeColor = GetMmdShadeColor(material, color);
+            var mainTexture = GetMmdMainTexture(material);
+            var sphereAddTexture = GetTexture(material, "_SphereAdd");
+            var outlineState = CaptureMmdOutlineState(material, materialName, sourceShaderName);
+            var cullMode = GetMmdCullMode(sourceShaderName);
+            var emissionMap = GetMmdEmissionMap(material);
+            var emissionColor = GetMmdEmissionColor(material, emissionMap);
+
+            material.shader = targetShader;
+
+            SetColorIfPresent(material, "_Color", color);
+            SetColorIfPresent(material, "_BaseColor", color);
+            SetColorIfPresent(material, "_ShadeColor", shadeColor);
+            SetTextureIfPresent(material, "_MainTex", mainTexture);
+            SetTextureIfPresent(material, "_ShadeTexture", mainTexture);
+            SetTextureIfPresent(material, "_SphereAdd", sphereAddTexture is Texture2D ? sphereAddTexture : null);
+            ApplyMmdEmission(material, emissionMap, emissionColor);
+
+            SetFloatIfPresent(material, "_BlendMode", blendMode);
+            SetFloatIfPresent(material, "_ShadeToony", 0.9f);
+            SetFloatIfPresent(material, "_ShadeShift", -0.25f);
+            SetFloatIfPresent(material, "_ReceiveShadowRate", 0.35f);
+            SetFloatIfPresent(material, "_CullMode", cullMode);
+
+            ApplyRenderModeState(material, blendMode);
+            ApplyMmdRenderQueueState(material, blendMode, sourceRenderQueue);
+            RestoreOutlineProperties(material, outlineState);
+            ApplyOutlineModeState(material);
+            ApplyEnvironmentLightingDefaults(material);
+            LiveToonDefaultAssets.EnsureDefaultJitterTexture(material);
+        }
+
+        private static string GetMmdSourceShaderName(Material material)
+        {
+            if (material == null)
+            {
+                return string.Empty;
+            }
+
+            var shaderName = material.shader != null ? material.shader.name : string.Empty;
+            if (!string.Equals(shaderName, DefaultShaderName, StringComparison.Ordinal))
+            {
+                return shaderName;
+            }
+
+            var materialPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(material));
+            return GetConvertedMaterialSourceShaderName(materialPath) ?? shaderName;
+        }
+
+        private static string GetMmdSourceMaterialName(Material material)
+        {
+            var materialName = material != null ? material.name : string.Empty;
+            return RemoveConvertedSuffix(materialName) ?? materialName;
+        }
+
+        private static Color GetMmdBaseColor(Material material)
+        {
+            var legacyColor = GetColor(material, "_Color", Color.white);
+            var baseColor = GetColor(material, "_BaseColor", legacyColor);
+            if (!HasVisibleRgb(baseColor))
+            {
+                baseColor = legacyColor;
+            }
+
+            baseColor.a = legacyColor.a;
+            return ClampColor01(baseColor);
+        }
+
+        private static Texture GetMmdMainTexture(Material material)
+        {
+            var mainTexture = GetTexture(material, "_MainTex");
+            return mainTexture != null ? mainTexture : GetTexture(material, "_BaseColorMap");
+        }
+
+        private static Texture GetMmdEmissionMap(Material material)
+        {
+            var emissionMap = GetTexture(material, "_EmissionMap");
+            return emissionMap != null ? emissionMap : GetTexture(material, "_EmissiveColorMap");
+        }
+
+        private static float GetMmdBlendMode(Material material, string materialName, string sourceShaderName)
+        {
+            if (IsMmdTransparentMaterial(materialName, sourceShaderName))
+            {
+                return GetMmdTransparentBlendMode(materialName);
+            }
+
+            var blendMode = GetFloat(material, "_BlendMode", float.NaN);
+            if (!float.IsNaN(blendMode) && blendMode > 0f)
+            {
+                return blendMode;
+            }
+
+            var mode = GetFloat(material, "_Mode", 0f);
+            var renderQueue = GetFloat(material, "_RenderQueue", material.renderQueue);
+            var color = GetColor(material, "_Color", Color.white);
+            if (mode >= 3f || renderQueue >= 3000f || color.a < 0.99f)
+            {
+                return 2f;
+            }
+
+            if (mode >= 1f || renderQueue >= 2450f)
+            {
+                return 1f;
+            }
+
+            return 0f;
+        }
+
+        private static bool IsMmdTransparentMaterial(string materialName, string sourceShaderName)
+        {
+            if (ShaderNameContains(sourceShaderName, "Transparent"))
+            {
+                return true;
+            }
+
+            return IsMmdOverlayTransparentMaterial(materialName);
+        }
+
+        private static float GetMmdTransparentBlendMode(string materialName)
+        {
+            return IsMmdOverlayTransparentMaterial(materialName)
+                ? 2f
+                : 1f;
+        }
+
+        private static bool IsMmdOverlayTransparentMaterial(string materialName)
+        {
+            materialName = materialName ?? string.Empty;
+            return materialName.IndexOf("hairshadow", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("eye_hi", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("eyehi", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("cheek", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("lens", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static float GetMmdCullMode(string sourceShaderName)
+        {
+            return ShaderNameContains(sourceShaderName, "BothFaces") ? 0f : 2f;
+        }
+
+        private static float GetMmdRenderQueue(Material material)
+        {
+            var renderQueue = GetFloat(material, "_RenderQueue", -1f);
+            return renderQueue >= 0f ? renderQueue : material.renderQueue;
+        }
+
+        private static void ApplyMmdRenderQueueState(Material material, float blendMode, float sourceRenderQueue)
+        {
+            var sourceQueueOffset = GetMmdRenderQueueOffset(sourceRenderQueue);
+            switch ((int)blendMode)
+            {
+                case 1:
+                    material.renderQueue = 2450 + sourceQueueOffset;
+                    break;
+                case 2:
+                    material.renderQueue = 3000 + sourceQueueOffset;
+                    break;
+                case 3:
+                    material.renderQueue = TransparentWithZWriteQueue + sourceQueueOffset;
+                    break;
+            }
+        }
+
+        private static int GetMmdRenderQueueOffset(float sourceRenderQueue)
+        {
+            if (sourceRenderQueue < 0f)
+            {
+                return 0;
+            }
+
+            var roundedRenderQueue = Mathf.RoundToInt(sourceRenderQueue);
+            if (roundedRenderQueue >= 2000 && roundedRenderQueue < 2500)
+            {
+                return Mathf.Clamp(roundedRenderQueue - 2000, 0, 99);
+            }
+
+            if (roundedRenderQueue >= 3000 && roundedRenderQueue < 3100)
+            {
+                return roundedRenderQueue - 3000;
+            }
+
+            return 0;
+        }
+
+        private static Color GetMmdShadeColor(Material material, Color litColor)
+        {
+            var fallbackAmbient = new Color(litColor.r * 0.65f, litColor.g * 0.65f, litColor.b * 0.65f, litColor.a);
+            var ambient = GetColor(material, "_Ambient", fallbackAmbient);
+            var shadeColor = Color.Lerp(litColor, ambient, 0.35f);
+            shadeColor.a = litColor.a;
+            return ClampColor01(shadeColor);
+        }
+
+        private static LiveToonOutlineMaterialState CaptureMmdOutlineState(Material material, string materialName, string sourceShaderName)
+        {
+            var edgeSize = GetFloat(material, "_EdgeSize", 0f);
+            var edgeColor = GetColor(material, "_EdgeColor", Color.black);
+            var usesOutline = UsesMmdOutline(materialName, sourceShaderName) && edgeSize > 0f && edgeColor.a > 0.001f;
+
+            return new LiveToonOutlineMaterialState
+            {
+                WidthMode = usesOutline ? 1f : 0f,
+                ColorMode = 0f,
+                Width = usesOutline ? Mathf.Clamp(edgeSize * MmdOutlineWidthScale, 0.01f, 1f) : 0f,
+                ScaledMaxDistance = 1f,
+                LightingMix = 0f,
+                CullMode = 1f,
+                WidthTexture = null,
+                Color = edgeColor
+            };
+        }
+
+        private static bool UsesMmdOutline(string materialName, string sourceShaderName)
+        {
+            if (ShaderNameContains(sourceShaderName, "Edge"))
+            {
+                return true;
+            }
+
+            materialName = materialName ?? string.Empty;
+            if (materialName.IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("eye_hi", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("eyehi", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("hairshadow", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("cheek", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("lens", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("megane", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("face01", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("hair01", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+
+            return materialName.IndexOf("body_", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("face00", StringComparison.OrdinalIgnoreCase) >= 0
+                || materialName.IndexOf("hair00", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool ShaderNameContains(string shaderName, string token)
+        {
+            return !string.IsNullOrEmpty(shaderName)
+                && shaderName.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static Color GetMmdEmissionColor(Material material, Texture emissionMap)
+        {
+            var emissive = GetColor(material, "_Emissive", Color.black);
+            if (HasVisibleRgb(emissive))
+            {
+                var autoLuminousPower = Mathf.Max(1f, GetFloat(material, "_ALPower", 1f));
+                return ScaleColor(emissive, autoLuminousPower);
+            }
+
+            if (emissionMap != null)
+            {
+                return GetColor(material, "_EmissionColor", Color.white);
+            }
+
+            return Color.black;
+        }
+
+        private static void ApplyMmdEmission(Material material, Texture emissionMap, Color emissionColor)
+        {
+            var hasEmission = HasVisibleRgb(emissionColor);
+            SetColorIfPresent(material, "_EmissionColor", hasEmission ? emissionColor : Color.black);
+            SetColorIfPresent(material, "_EmissiveColor", hasEmission ? emissionColor : Color.black);
+            SetColorIfPresent(material, "_EmissiveColorLDR", hasEmission ? ClampColor01(emissionColor) : Color.black);
+            SetTextureIfPresent(material, "_EmissionMap", hasEmission && emissionMap != null ? emissionMap : null);
         }
 
         private static void ApplyEnvironmentLightingDefaults(Material material)
@@ -546,6 +862,41 @@ namespace VLiveKit.LiveToon.Editor
             }
         }
 
+        private static void SetTextureIfPresent(Material material, string propertyName, Texture value)
+        {
+            if (material.HasProperty(propertyName))
+            {
+                material.SetTexture(propertyName, value);
+            }
+        }
+
+        private static void SetColorIfPresent(Material material, string propertyName, Color value)
+        {
+            if (material.HasProperty(propertyName))
+            {
+                material.SetColor(propertyName, value);
+            }
+        }
+
+        private static bool HasVisibleRgb(Color color)
+        {
+            return color.r > 0.001f || color.g > 0.001f || color.b > 0.001f;
+        }
+
+        private static Color ScaleColor(Color color, float scale)
+        {
+            return new Color(color.r * scale, color.g * scale, color.b * scale, color.a);
+        }
+
+        private static Color ClampColor01(Color color)
+        {
+            return new Color(
+                Mathf.Clamp01(color.r),
+                Mathf.Clamp01(color.g),
+                Mathf.Clamp01(color.b),
+                Mathf.Clamp01(color.a));
+        }
+
         private static Material CreateConvertedMaterial(Material sourceMaterial)
         {
             var sourceAssetPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(sourceMaterial));
@@ -577,7 +928,7 @@ namespace VLiveKit.LiveToon.Editor
 
             AssetDatabase.CreateAsset(convertedMaterial, convertedPath);
             Undo.RegisterCreatedObjectUndo(convertedMaterial, "Create LiveToon Material Copy");
-            SetConvertedMaterialSourcePath(convertedPath, sourceAssetPath);
+            SetConvertedMaterialSourceIdentity(convertedPath, sourceMaterial, sourceAssetPath);
             return convertedMaterial;
         }
 
@@ -592,7 +943,7 @@ namespace VLiveKit.LiveToon.Editor
                 return $"{convertedSourceDirectory}/{SanitizeAssetFileName(originalLikeName)}{ConvertedSuffix}{convertedSourceExtension}";
             }
 
-            var sourceFileName = string.IsNullOrEmpty(sourceAssetPath)
+            var sourceFileName = UseSourceMaterialNameForConvertedAsset(sourceMaterial, sourceAssetPath)
                 ? SanitizeAssetFileName(sourceMaterial.name)
                 : SanitizeAssetFileName(GetAssetFileNameWithoutExtension(sourceAssetPath));
             var extension = GetMaterialAssetExtension(sourceAssetPath);
@@ -616,6 +967,23 @@ namespace VLiveKit.LiveToon.Editor
             return $"{GeneratedMaterialsDirectory}/{convertedFileName}";
         }
 
+        private static bool UseSourceMaterialNameForConvertedAsset(Material sourceMaterial, string sourceAssetPath)
+        {
+            if (sourceMaterial == null || string.IsNullOrEmpty(sourceMaterial.name))
+            {
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(sourceAssetPath))
+            {
+                return true;
+            }
+
+            var extension = GetAssetExtension(sourceAssetPath);
+            return !string.Equals(extension, ".mat", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(extension, ".asset", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string GetMaterialAssetExtension(string assetPath)
         {
             var extension = string.IsNullOrEmpty(assetPath) ? ".mat" : GetAssetExtension(assetPath);
@@ -633,10 +1001,16 @@ namespace VLiveKit.LiveToon.Editor
                 return null;
             }
 
+            var sourceMaterial = GetConvertedMaterialSourceByGlobalObjectId(convertedPath);
+            if (sourceMaterial != null)
+            {
+                return sourceMaterial;
+            }
+
             var sourcePath = GetConvertedMaterialSourcePath(convertedPath);
             if (!string.IsNullOrEmpty(sourcePath))
             {
-                var sourceMaterial = AssetDatabase.LoadAssetAtPath<Material>(sourcePath);
+                sourceMaterial = LoadSourceMaterialFromPath(sourcePath, GetConvertedMaterialSourceName(convertedPath), material);
                 if (sourceMaterial != null)
                 {
                     return sourceMaterial;
@@ -741,9 +1115,9 @@ namespace VLiveKit.LiveToon.Editor
                     || fileName.IndexOf($"{ConvertedSuffix}_", StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
-        private static void SetConvertedMaterialSourcePath(string convertedPath, string sourceAssetPath)
+        private static void SetConvertedMaterialSourceIdentity(string convertedPath, Material sourceMaterial, string sourceAssetPath)
         {
-            if (string.IsNullOrEmpty(convertedPath) || string.IsNullOrEmpty(sourceAssetPath))
+            if (string.IsNullOrEmpty(convertedPath) || sourceMaterial == null || string.IsNullOrEmpty(sourceAssetPath))
             {
                 return;
             }
@@ -755,13 +1129,19 @@ namespace VLiveKit.LiveToon.Editor
             }
 
             var sourceLine = $"{SourceMaterialPathPrefix}{NormalizeAssetPath(sourceAssetPath)}";
+            var sourceGlobalIdLine = $"{SourceMaterialGlobalObjectIdPrefix}{GlobalObjectId.GetGlobalObjectIdSlow(sourceMaterial)}";
+            var sourceNameLine = $"{SourceMaterialNamePrefix}{sourceMaterial.name}";
+            var sourceShaderNameLine = $"{SourceMaterialShaderNamePrefix}{GetMmdSourceShaderName(sourceMaterial)}";
             var userData = importer.userData ?? string.Empty;
             var lines = userData.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
             var updatedLines = new List<string>();
 
             foreach (var line in lines)
             {
-                if (line.StartsWith(SourceMaterialPathPrefix, StringComparison.Ordinal))
+                if (line.StartsWith(SourceMaterialPathPrefix, StringComparison.Ordinal)
+                    || line.StartsWith(SourceMaterialGlobalObjectIdPrefix, StringComparison.Ordinal)
+                    || line.StartsWith(SourceMaterialNamePrefix, StringComparison.Ordinal)
+                    || line.StartsWith(SourceMaterialShaderNamePrefix, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -770,6 +1150,9 @@ namespace VLiveKit.LiveToon.Editor
             }
 
             updatedLines.Add(sourceLine);
+            updatedLines.Add(sourceGlobalIdLine);
+            updatedLines.Add(sourceNameLine);
+            updatedLines.Add(sourceShaderNameLine);
             var updatedUserData = string.Join("\n", updatedLines);
             if (string.Equals(userData, updatedUserData, StringComparison.Ordinal))
             {
@@ -780,7 +1163,43 @@ namespace VLiveKit.LiveToon.Editor
             importer.SaveAndReimport();
         }
 
+        private static Material GetConvertedMaterialSourceByGlobalObjectId(string convertedPath)
+        {
+            var globalObjectId = GetConvertedMaterialSourceGlobalObjectId(convertedPath);
+            if (string.IsNullOrEmpty(globalObjectId))
+            {
+                return null;
+            }
+
+            if (!GlobalObjectId.TryParse(globalObjectId, out var parsedGlobalObjectId))
+            {
+                return null;
+            }
+
+            return GlobalObjectId.GlobalObjectIdentifierToObjectSlow(parsedGlobalObjectId) as Material;
+        }
+
+        private static string GetConvertedMaterialSourceGlobalObjectId(string convertedPath)
+        {
+            return GetConvertedMaterialSourceUserDataValue(convertedPath, SourceMaterialGlobalObjectIdPrefix);
+        }
+
         private static string GetConvertedMaterialSourcePath(string convertedPath)
+        {
+            return NormalizeAssetPath(GetConvertedMaterialSourceUserDataValue(convertedPath, SourceMaterialPathPrefix));
+        }
+
+        private static string GetConvertedMaterialSourceName(string convertedPath)
+        {
+            return GetConvertedMaterialSourceUserDataValue(convertedPath, SourceMaterialNamePrefix);
+        }
+
+        private static string GetConvertedMaterialSourceShaderName(string convertedPath)
+        {
+            return GetConvertedMaterialSourceUserDataValue(convertedPath, SourceMaterialShaderNamePrefix);
+        }
+
+        private static string GetConvertedMaterialSourceUserDataValue(string convertedPath, string prefix)
         {
             if (string.IsNullOrEmpty(convertedPath))
             {
@@ -796,13 +1215,109 @@ namespace VLiveKit.LiveToon.Editor
             var lines = importer.userData.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
             foreach (var line in lines)
             {
-                if (line.StartsWith(SourceMaterialPathPrefix, StringComparison.Ordinal))
+                if (line.StartsWith(prefix, StringComparison.Ordinal))
                 {
-                    return NormalizeAssetPath(line.Substring(SourceMaterialPathPrefix.Length));
+                    return line.Substring(prefix.Length);
                 }
             }
 
             return null;
+        }
+
+        private static Material LoadSourceMaterialFromPath(string sourcePath, string sourceName, Material convertedMaterial)
+        {
+            sourcePath = NormalizeAssetPath(sourcePath);
+            if (string.IsNullOrEmpty(sourcePath))
+            {
+                return null;
+            }
+
+            var assets = AssetDatabase.LoadAllAssetsAtPath(sourcePath);
+            if (!string.IsNullOrEmpty(sourceName))
+            {
+                foreach (var asset in assets)
+                {
+                    if (asset is Material material && string.Equals(material.name, sourceName, StringComparison.Ordinal))
+                    {
+                        return material;
+                    }
+                }
+            }
+
+            var matchedMaterial = FindSourceMaterialByConvertedProperties(assets, convertedMaterial);
+            if (matchedMaterial != null)
+            {
+                return matchedMaterial;
+            }
+
+            if (string.Equals(GetMaterialAssetExtension(sourcePath), GetAssetExtension(sourcePath), StringComparison.OrdinalIgnoreCase))
+            {
+                return AssetDatabase.LoadAssetAtPath<Material>(sourcePath);
+            }
+
+            var materialCount = 0;
+            Material onlyMaterial = null;
+            foreach (var asset in assets)
+            {
+                if (!(asset is Material material))
+                {
+                    continue;
+                }
+
+                onlyMaterial = material;
+                materialCount++;
+                if (materialCount > 1)
+                {
+                    return null;
+                }
+            }
+
+            return onlyMaterial;
+        }
+
+        private static Material FindSourceMaterialByConvertedProperties(UnityEngine.Object[] sourceAssets, Material convertedMaterial)
+        {
+            if (sourceAssets == null || convertedMaterial == null)
+            {
+                return null;
+            }
+
+            var convertedRenderQueue = GetFloat(convertedMaterial, "_RenderQueue", float.NaN);
+            if (!float.IsNaN(convertedRenderQueue))
+            {
+                foreach (var asset in sourceAssets)
+                {
+                    if (asset is Material material
+                        && Mathf.Approximately(GetFloat(material, "_RenderQueue", float.NaN), convertedRenderQueue))
+                    {
+                        return material;
+                    }
+                }
+            }
+
+            var convertedMainTexture = GetMmdMainTexture(convertedMaterial);
+            if (convertedMainTexture == null)
+            {
+                return null;
+            }
+
+            Material matchedMaterial = null;
+            foreach (var asset in sourceAssets)
+            {
+                if (!(asset is Material material) || GetMmdMainTexture(material) != convertedMainTexture)
+                {
+                    continue;
+                }
+
+                if (matchedMaterial != null)
+                {
+                    return null;
+                }
+
+                matchedMaterial = material;
+            }
+
+            return matchedMaterial;
         }
 
         private static string SanitizeAssetFileName(string fileName)

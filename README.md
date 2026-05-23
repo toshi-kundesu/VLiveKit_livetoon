@@ -60,7 +60,7 @@ VLiveKitの一部として開発している、
 
 Open the converter from `toshi/VLiveKit/LiveToon/Shader Converter`.
 
-The converter currently uses a non-destructive LoadModel-style baseline for VRM 0.x / MToon materials:
+The converter has a `Conversion Source` selector. `MToon` keeps the non-destructive LoadModel-style baseline for VRM 0.x / MToon materials:
 
 - use the Editor Window for one-off conversion, or add `LiveToonShaderConverter` to a scene object to save conversion settings per scene
 - the `LiveToonShaderConverter` component exposes the same convert and restore buttons in its Inspector
@@ -86,6 +86,14 @@ The converter currently uses a non-destructive LoadModel-style baseline for VRM 
 - keeps source outline settings by default; enable `Disable Outline After Convert` only when isolating outline rendering issues
 - optionally creates legacy material backup assets beside the source material for older in-place debugging workflows
 - can still restore material asset values from those legacy backups with `Restore Legacy Material Assets From Backups`
+
+`MMD4Mecanim` conversion uses a separate material mapping so the MToon path stays unchanged:
+
+- copies `_Color`, `_MainTex`, and a `_ShadeColor` approximation from the MMD material's `_Ambient`
+- maps MMD edge settings from `_EdgeColor` and `_EdgeSize` into LiveToon outline properties
+- forces emission off unless MMD4Mecanim has a real `_Emissive` color or `_EmissionMap`, avoiding the all-white look from default white `_EmissionColor`
+- keeps MMD shader-name hints such as `Transparent`, `Edge`, and `BothFaces`, plus `_Mode`, `_RenderQueue`, material names such as `hairshadow` / `eye_hi`, and `_Color.a`; regular MMD transparent mesh parts convert to Cutout for texture alpha, while overlay parts such as `hairshadow`, `eye_hi`, `cheek`, `decal`, and `lens` stay Transparent
+- tracks FBX-embedded source materials with Unity `GlobalObjectId`, material name, and source shader name, so repeated conversion does not collapse every material back to the first material inside the FBX
 
 Legacy backups are stored in a `LiveToonMaterialBackups` folder next to the source material asset. The converter keeps the first backup instead of overwriting it, so you can compare original VRM 0.x material values while debugging culling and double-sided rendering.
 
