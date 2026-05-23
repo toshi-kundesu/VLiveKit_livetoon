@@ -62,6 +62,7 @@ namespace VLiveKit.LiveToon.Editor
         private const float DefaultIndirectLightIntensity = 0.35f;
         private const float DefaultReflectionProbeIntensity = 0.25f;
         private const float DefaultReflectionProbeSmoothness = 0.35f;
+        private static readonly char[] AdditionalInvalidAssetFileNameChars = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
         private static readonly float BlendZero = (float)UnityEngine.Rendering.BlendMode.Zero;
         private static readonly float BlendOne = (float)UnityEngine.Rendering.BlendMode.One;
         private static readonly float BlendSrcAlpha = (float)UnityEngine.Rendering.BlendMode.SrcAlpha;
@@ -554,10 +555,20 @@ namespace VLiveKit.LiveToon.Editor
                 return null;
             }
 
-            convertedPath = AssetDatabase.GenerateUniqueAssetPath(convertedPath);
+            var convertedDirectory = GetAssetDirectoryName(convertedPath);
+            if (string.IsNullOrEmpty(convertedDirectory))
+            {
+                Debug.LogWarning($"LiveToon shader conversion skipped material '{sourceMaterial.name}' because converted asset path is invalid: {convertedPath}", sourceMaterial);
+                return null;
+            }
 
-            var convertedDirectory = NormalizeAssetPath(Path.GetDirectoryName(convertedPath));
             EnsureFolder(convertedDirectory);
+            convertedPath = AssetDatabase.GenerateUniqueAssetPath(convertedPath);
+            if (string.IsNullOrEmpty(convertedPath))
+            {
+                Debug.LogWarning($"LiveToon shader conversion skipped material '{sourceMaterial.name}' because Unity could not generate a material path under: {convertedDirectory}", sourceMaterial);
+                return null;
+            }
 
             var convertedMaterial = new Material(sourceMaterial)
             {
@@ -574,8 +585,8 @@ namespace VLiveKit.LiveToon.Editor
         {
             if (!string.IsNullOrEmpty(sourceAssetPath) && IsConvertedMaterialPath(sourceAssetPath))
             {
-                var convertedSourceDirectory = NormalizeAssetPath(Path.GetDirectoryName(sourceAssetPath));
-                var convertedSourceName = Path.GetFileNameWithoutExtension(sourceAssetPath);
+                var convertedSourceDirectory = GetAssetDirectoryName(sourceAssetPath);
+                var convertedSourceName = GetAssetFileNameWithoutExtension(sourceAssetPath);
                 var originalLikeName = RemoveConvertedSuffix(convertedSourceName) ?? convertedSourceName;
                 var convertedSourceExtension = GetMaterialAssetExtension(sourceAssetPath);
                 return $"{convertedSourceDirectory}/{SanitizeAssetFileName(originalLikeName)}{ConvertedSuffix}{convertedSourceExtension}";
@@ -583,13 +594,13 @@ namespace VLiveKit.LiveToon.Editor
 
             var sourceFileName = string.IsNullOrEmpty(sourceAssetPath)
                 ? SanitizeAssetFileName(sourceMaterial.name)
-                : SanitizeAssetFileName(Path.GetFileNameWithoutExtension(sourceAssetPath));
+                : SanitizeAssetFileName(GetAssetFileNameWithoutExtension(sourceAssetPath));
             var extension = GetMaterialAssetExtension(sourceAssetPath);
             var convertedFileName = $"{sourceFileName}{ConvertedSuffix}{extension}";
 
             if (!string.IsNullOrEmpty(sourceAssetPath) && sourceAssetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
             {
-                var sourceDirectory = NormalizeAssetPath(Path.GetDirectoryName(sourceAssetPath));
+                var sourceDirectory = GetAssetDirectoryName(sourceAssetPath);
                 if (!string.IsNullOrEmpty(sourceDirectory))
                 {
                     return $"{sourceDirectory}/{ConvertedDirectoryName}/{convertedFileName}";
@@ -607,8 +618,11 @@ namespace VLiveKit.LiveToon.Editor
 
         private static string GetMaterialAssetExtension(string assetPath)
         {
-            var extension = string.IsNullOrEmpty(assetPath) ? ".mat" : Path.GetExtension(assetPath);
-            return extension == ".asset" || extension == ".mat" ? extension : ".mat";
+            var extension = string.IsNullOrEmpty(assetPath) ? ".mat" : GetAssetExtension(assetPath);
+            return string.Equals(extension, ".asset", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, ".mat", StringComparison.OrdinalIgnoreCase)
+                ? extension
+                : ".mat";
         }
 
         private static Material FindOriginalMaterialForConvertedCopy(Material material)
@@ -651,7 +665,7 @@ namespace VLiveKit.LiveToon.Editor
                 return null;
             }
 
-            var convertedFileName = Path.GetFileNameWithoutExtension(convertedPath);
+            var convertedFileName = GetAssetFileNameWithoutExtension(convertedPath);
             var sourceFileName = RemoveConvertedSuffix(convertedFileName);
             if (string.IsNullOrEmpty(sourceFileName))
             {
@@ -721,7 +735,7 @@ namespace VLiveKit.LiveToon.Editor
             }
 
             var normalizedPath = NormalizeAssetPath(assetPath);
-            var fileName = Path.GetFileNameWithoutExtension(normalizedPath);
+            var fileName = GetAssetFileNameWithoutExtension(normalizedPath);
             return normalizedPath.IndexOf($"/{ConvertedDirectoryName}/", StringComparison.OrdinalIgnoreCase) >= 0
                 && (fileName.EndsWith(ConvertedSuffix, StringComparison.OrdinalIgnoreCase)
                     || fileName.IndexOf($"{ConvertedSuffix}_", StringComparison.OrdinalIgnoreCase) >= 0);
@@ -803,25 +817,40 @@ namespace VLiveKit.LiveToon.Editor
                 fileName = fileName.Replace(invalidChar, '_');
             }
 
+            foreach (var invalidChar in AdditionalInvalidAssetFileNameChars)
+            {
+                fileName = fileName.Replace(invalidChar, '_');
+            }
+
+            for (var i = 0; i < fileName.Length; i++)
+            {
+                if (char.IsControl(fileName[i]))
+                {
+                    fileName = fileName.Replace(fileName[i], '_');
+                }
+            }
+
+            fileName = fileName.Trim().Trim('.');
             return string.IsNullOrWhiteSpace(fileName) ? "Material" : fileName;
         }
 
         private static bool TryCreateMaterialBackup(Material material)
         {
-            var assetPath = AssetDatabase.GetAssetPath(material);
+            var assetPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(material));
             if (string.IsNullOrEmpty(assetPath))
             {
                 return false;
             }
 
-            var directory = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
+            var directory = GetAssetDirectoryName(assetPath);
             if (string.IsNullOrEmpty(directory))
             {
                 return false;
             }
 
-            var extension = Path.GetExtension(assetPath);
-            if (extension != ".mat" && extension != ".asset")
+            var extension = GetAssetExtension(assetPath);
+            if (!string.Equals(extension, ".mat", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(extension, ".asset", StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
@@ -829,7 +858,7 @@ namespace VLiveKit.LiveToon.Editor
             var backupDirectory = $"{directory}/{BackupDirectoryName}";
             EnsureFolder(backupDirectory);
 
-            var fileName = Path.GetFileNameWithoutExtension(assetPath);
+            var fileName = GetAssetFileNameWithoutExtension(assetPath);
             var backupPath = $"{backupDirectory}/{fileName}{BackupSuffix}{extension}";
             if (AssetDatabase.LoadAssetAtPath<Material>(backupPath) != null)
             {
@@ -841,25 +870,26 @@ namespace VLiveKit.LiveToon.Editor
 
         private static Material FindMaterialBackup(Material material)
         {
-            var assetPath = AssetDatabase.GetAssetPath(material);
+            var assetPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(material));
             if (string.IsNullOrEmpty(assetPath))
             {
                 return null;
             }
 
-            var extension = Path.GetExtension(assetPath);
-            if (extension != ".mat" && extension != ".asset")
+            var extension = GetAssetExtension(assetPath);
+            if (!string.Equals(extension, ".mat", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(extension, ".asset", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
 
-            var directory = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
+            var directory = GetAssetDirectoryName(assetPath);
             if (string.IsNullOrEmpty(directory))
             {
                 return null;
             }
 
-            var fileName = Path.GetFileNameWithoutExtension(assetPath);
+            var fileName = GetAssetFileNameWithoutExtension(assetPath);
             var backupDirectory = $"{directory}/{BackupDirectoryName}";
             var backupPath = $"{backupDirectory}/{fileName}{BackupSuffix}{extension}";
             var backup = AssetDatabase.LoadAssetAtPath<Material>(backupPath);
@@ -961,6 +991,54 @@ namespace VLiveKit.LiveToon.Editor
         private static string NormalizeAssetPath(string path)
         {
             return string.IsNullOrEmpty(path) ? path : path.Replace('\\', '/');
+        }
+
+        private static string GetAssetDirectoryName(string assetPath)
+        {
+            var normalizedPath = NormalizeAssetPath(assetPath);
+            if (string.IsNullOrEmpty(normalizedPath))
+            {
+                return null;
+            }
+
+            var separatorIndex = normalizedPath.LastIndexOf('/');
+            return separatorIndex <= 0 ? null : normalizedPath.Substring(0, separatorIndex);
+        }
+
+        private static string GetAssetFileNameWithoutExtension(string assetPath)
+        {
+            var fileName = GetAssetFileName(assetPath);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return fileName;
+            }
+
+            var extensionIndex = fileName.LastIndexOf('.');
+            return extensionIndex > 0 ? fileName.Substring(0, extensionIndex) : fileName;
+        }
+
+        private static string GetAssetExtension(string assetPath)
+        {
+            var fileName = GetAssetFileName(assetPath);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return string.Empty;
+            }
+
+            var extensionIndex = fileName.LastIndexOf('.');
+            return extensionIndex > 0 ? fileName.Substring(extensionIndex) : string.Empty;
+        }
+
+        private static string GetAssetFileName(string assetPath)
+        {
+            var normalizedPath = NormalizeAssetPath(assetPath);
+            if (string.IsNullOrEmpty(normalizedPath))
+            {
+                return normalizedPath;
+            }
+
+            var separatorIndex = normalizedPath.LastIndexOf('/');
+            return separatorIndex >= 0 ? normalizedPath.Substring(separatorIndex + 1) : normalizedPath;
         }
     }
 }

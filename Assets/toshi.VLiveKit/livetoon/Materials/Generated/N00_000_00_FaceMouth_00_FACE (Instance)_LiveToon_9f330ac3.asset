@@ -1,0 +1,195 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: N00_000_00_FaceMouth_00_FACE (Instance)_LiveToon_9f330ac3
+  m_Shader: {fileID: 4800000, guid: 6459b2db96a08ca41b0f9b39dc7ad59e, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - MTOON_OUTLINE_COLOR_FIXED
+  - MTOON_OUTLINE_WIDTH_WORLD
+  - _ALPHATEST_ON
+  m_InvalidKeywords:
+  - _NORMALMAP
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 2450
+  stringTagMap:
+    RenderType: TransparentCutout
+  disabledShaderPasses:
+  - TransparentDepthPrepass
+  - TransparentDepthPostpass
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _BumpMap:
+        m_Texture: {fileID: 2800000, guid: 7f491921a4964b64cb86b72674696d5e, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 2800000, guid: 28452cba958dce44d813e8871783cf2a, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _JitterTex:
+        m_Texture: {fileID: 2800000, guid: 71402ec0b7cb2da439b4f350f95b2254, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _LiveToonBoxShadowMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 2800000, guid: 1d49df49f1beace4897fff5545b76573, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _OutlineWidthTexture:
+        m_Texture: {fileID: 2800000, guid: 892490f82bd7caf43bbdc00c51031bba, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _ReceiveShadowTexture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _RembrandLightingMask:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _RimTexture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _ShadeTexture:
+        m_Texture: {fileID: 2800000, guid: df52f17a04822c84abd06edefb479775, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _ShadingGradeTexture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _SphereAdd:
+        m_Texture: {fileID: 2800000, guid: 50658a8f09e251142a6498f4fe5ba260, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _TestTexture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _UvAnimMaskTexture:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _WetHairOverlayTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - _AlphaCutoffPostpass: 0.5
+    - _AlphaCutoffPrepass: 0.5
+    - _AlphaToMask: 0
+    - _AnisoAxis: 0
+    - _AnisoStrength: 0.6
+    - _AntiPerspectiveIntensity: 0.1
+    - _BlendMode: 1
+    - _BlendOp: 0
+    - _BumpScale: 1
+    - _CullMode: 2
+    - _CustomRimIntensity: 1
+    - _Cutoff: 0.5
+    - _DebugMode: 0
+    - _Distance: 0.95
+    - _DstBlend: 0
+    - _FaceLightLimitIntensity: 0
+    - _FaceLightPitchFlatten: 1
+    - _FaceLightYawStep: 45
+    - _FaceLightYawStickyRange: 0.45
+    - _FaceSphereIntensity: 0
+    - _FallbackLightIntensity: 1
+    - _Focal: 0.1
+    - _GradWidth: 0.1
+    - _IndirectLightIntensity: 0.35
+    - _Intensity: 0.5
+    - _IsFace: 0
+    - _JitterIntensity: 0.5
+    - _LambertThresh: 0.5
+    - _LightColorAttenuation: 0
+    - _LiveToonBoxShadowBias: 0.003
+    - _LiveToonBoxShadowEnabled: 0
+    - _LiveToonBoxShadowFlipU: 0
+    - _LiveToonBoxShadowFlipV: 1
+    - _LiveToonBoxShadowInvertSilhouette: 0
+    - _LiveToonBoxShadowSilhouetteAttenuation: 0.12
+    - _LiveToonBoxShadowStrength: 1
+    - _LiveToonBoxShadowUseDepth: 0
+    - _LiveToonPerspectiveCorrectionGroundY: 0
+    - _LiveToonPerspectiveCorrectionHeight: 1.5
+    - _LiveToonPerspectiveCorrectionHeightPower: 1
+    - _LiveToonPerspectiveCorrectionIntensity: 0
+    - _MToonVersion: 39
+    - _OutlineColorMode: 0
+    - _OutlineCullMode: 1
+    - _OutlineLightingMix: 1
+    - _OutlineScaledMaxDistance: 1
+    - _OutlineWidth: 0.12228456
+    - _OutlineWidthMode: 1
+    - _Position: 0.3
+    - _PunctualLightIntensity: 1
+    - _ReceiveShadowRate: 1
+    - _ReduSha: 0
+    - _ReflectionProbeIntensity: 0.25
+    - _ReflectionProbeSmoothness: 0.35
+    - _RimFresnelPower: 7.999984
+    - _RimLift: 0.1
+    - _RimLightingMix: 0
+    - _Sat: 1
+    - _ShadeShift: -0.9
+    - _ShadeToony: 0
+    - _ShadingGradeRate: 1
+    - _Sharpness: 30
+    - _Shininess: 64
+    - _Size: 1.1
+    - _SpecCut: 0.6
+    - _SrcBlend: 1
+    - _SweatHighlight: 0.7
+    - _SweatIntensity: 0
+    - _SweatScale: 28
+    - _SweatSpeed: 0.35
+    - _SweatTrail: 0.35
+    - _TestFloat: 0.5
+    - _TransparentThreshold: 0
+    - _UseCustomBlend: 0
+    - _UvAnimRotation: 0
+    - _UvAnimScrollX: 0
+    - _UvAnimScrollY: 0
+    - _WetHairOverlayGloss: 0.35
+    - _WetHairOverlayIntensity: 0
+    - _ZTeForLiOpa: 4
+    - _ZWrite: 1
+    - _isCharFace: 0
+    - _isFACE: 0
+    - _isHair: 0
+    - _testFloatData: 0
+    m_Colors:
+    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _EmissionColor: {r: 1, g: 1, b: 1, a: 1}
+    - _FaceForwardDirection: {r: 0, g: 0, b: 0, a: 0}
+    - _FacePosition: {r: 0, g: 0, b: 0, a: 0}
+    - _FaceUpDirection: {r: 0, g: 0, b: 0, a: 0}
+    - _FallbackLightColor: {r: 1, g: 1, b: 1, a: 1}
+    - _LiveToonPerspectiveCorrectionCenterWS: {r: 0, g: 0, b: 0, a: 0}
+    - _OutlineColor: {r: 0.27450976, g: 0.09019602, b: 0.12549013, a: 1}
+    - _RimColor: {r: 0, g: 0, b: 0, a: 1}
+    - _ShadeColor: {r: 1, g: 1, b: 1, a: 1}
+    - _SpecColor: {r: 1, g: 1, b: 1, a: 1}
+    - _SweatColor: {r: 1, g: 1, b: 1, a: 1}
+    - _WetHairOverlayColor: {r: 0.035, g: 0.028, b: 0.02, a: 1}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1
