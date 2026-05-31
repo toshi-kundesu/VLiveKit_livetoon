@@ -256,32 +256,15 @@ float4 EL_AT_SC(PositionInputs posInput, float3 V, float4 inputColor)
 {
 	float4 result = inputColor;
 
-    if (_BlendMode == (int)RENDER_MODE_OPAQUE)
+    if (_TransparentFogIntensity > 0.0)
     {
-
-    }
-    else if (_BlendMode == (int)RENDER_MODE_CUTOUT)
-    {
-
-    }
-    else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
-    {
-#ifdef _ENABLE_FOG_ON_TRANSPARENT
         float3 volColor, volOpacity;
-		EvaluateAtmosphericScattering(posInput, V, volColor, volOpacity);
+        EvaluateAtmosphericScattering(posInput, V, volColor, volOpacity);
 
-		result.rgb = result.rgb * (1.0 - volOpacity) + volColor * result.a;
-#endif
-    }
-    else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
-    {
-#ifdef _ENABLE_FOG_ON_TRANSPARENT
-        float3 volColor, volOpacity;
-		EvaluateAtmosphericScattering(posInput, V, volColor, volOpacity);
-
-		result.rgb = result.rgb * (1.0 - volOpacity) + volColor * result.a;
-#endif
-
+        // HDRP returns volColor as premultiplied fog color; do not multiply it by volOpacity again.
+        // MMD converted materials can keep opaque/cutout blend modes while rendering after HDRP's opaque fog pass.
+        float fogWeight = saturate(_TransparentFogIntensity) * lerp(1.0, saturate(result.a), saturate(_TransparentFogAlphaWeight));
+        result.rgb = result.rgb * (1.0 - volOpacity * fogWeight) + volColor * result.a * fogWeight;
     }
     
 	return result;
@@ -375,10 +358,12 @@ float outlineTex = SAMPLE_TEXTURE2D_LOD(_OutlineWidthTexture, sampler_OutlineWid
 
 float CalculateTransparentOpacity(float4 mainTex)
 {
-    float threshold = clamp(-20.0, 1.0, _TransparentThreshold);
-    float thresholdAlpha = smoothstep(threshold, 1.0, mainTex.a);
-    float maskedAlpha = thresholdAlpha * mainTex.r;
-    return lerp(maskedAlpha, thresholdAlpha, _Color.a);
+    float textureAlpha = saturate(mainTex.a);
+    float colorAlpha = saturate(_Color.a);
+    // MMD4Mecanim transparent materials multiply texture alpha by the material diffuse alpha.
+    float alpha = saturate(textureAlpha * colorAlpha);
+    float threshold = saturate(_TransparentThreshold);
+    return threshold > 0.0 ? smoothstep(threshold, 1.0, alpha) : alpha;
 }
 
         //RT TRANS CO
@@ -413,11 +398,13 @@ void RT_TRANS_CO( float2 uv , float4 _MainTex_var , out float RTD_TRAN_OPA_Sli ,
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
 				RTD_TRAN_OPA_Sli = CalculateTransparentOpacity(_MainTex_var);
+                clip(RTD_TRAN_OPA_Sli - _TransparentClipThreshold);
 
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
     {
 				RTD_TRAN_OPA_Sli = CalculateTransparentOpacity(_MainTex_var);
+                clip(RTD_TRAN_OPA_Sli - _TransparentClipThreshold);
 
     }
 
@@ -1183,6 +1170,22 @@ specCol *= specNdL * specShadowMask;
 
 }
 
+float mmdSpecularIntensity = saturate(_MmdSpecularIntensity);
+if (mmdSpecularIntensity > 0.0)
+{
+    float3 H_mmdSpecular = normalize(normalize(lightDir) + normalize(worldView));
+    float mmdSpecularNdotH = saturate(dot(worldNormal_default, H_mmdSpecular));
+    float mmdSpecular = pow(mmdSpecularNdotH, max(_MmdSpecularPower, 1.0)) * mmdSpecularIntensity;
+    float mmdSpecularShadowMask = smoothstep(0.05, 0.95, hairSpecDirectionalShadow);
+    specCol += _MmdSpecularColor.rgb
+        * directionalLightData.color
+        * mmdSpecular
+        * mmdSpecularShadowMask
+        * GetCurrentExposureMultiplier()
+        * (1.0 - saturate(i.isOutline))
+        * 0.1;
+}
+
 
     // return float4(lightIntensity01, lightIntensity01, lightIntensity01, 1);
     half boundarySaturationWeight = LiveToonBoundarySaturationWeight(col, lightIntensity01, alpha, boundarySaturationStrength);
@@ -1620,7 +1623,7 @@ float4 frag_outline(v2f i) : SV_TARGET
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT || _BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
     {
-        clip(LiveToonTransparentDepthOpacity(mainTex) - 0.001);
+        clip(LiveToonTransparentDepthOpacity(mainTex) - _TransparentClipThreshold);
     }
 
     float3 outlineColor = _OutlineColor.rgb;

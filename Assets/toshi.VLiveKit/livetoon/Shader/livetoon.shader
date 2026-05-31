@@ -69,6 +69,22 @@ Shader "toshi/VLiveKit/livetoon"
         [HideInInspector] _AlphaToMask ("_AlphaToMask", Float) = 0.0
         [HideInInspector] _AlphaCutoffPrepass ("_AlphaCutoffPrepass", Range(0, 1)) = 0.5
         [HideInInspector] _AlphaCutoffPostpass ("_AlphaCutoffPostpass", Range(0, 1)) = 0.5
+        [HideInInspector] _TransparentClipThreshold ("_TransparentClipThreshold", Float) = 0.001
+        [HideInInspector] _TransparentDepthPrepassEnable ("_TransparentDepthPrepassEnable", Float) = 0.0
+        [HideInInspector] _TransparentDepthPostpassEnable ("_TransparentDepthPostpassEnable", Float) = 0.0
+        [HideInInspector] _TransparentFogAlphaWeight ("_TransparentFogAlphaWeight", Float) = 0.0
+        [HideInInspector] _TransparentFogIntensity ("_TransparentFogIntensity", Float) = 1.0
+        [HideInInspector] _MmdTransparentDepthWrite ("_MmdTransparentDepthWrite", Float) = 0.0
+        // MMD4Mecanim conversion: MMDLit-Transparent pulls transparent depth slightly forward with Offset -0.1, -1.
+        [HideInInspector] _MmdForwardOffsetFactor ("_MmdForwardOffsetFactor", Float) = 0.0
+        [HideInInspector] _MmdForwardOffsetUnits ("_MmdForwardOffsetUnits", Float) = 0.0
+        // MMD4Mecanim conversion: MMDLit-Edge pushes outlines slightly back with Offset 0.1, 1.
+        [HideInInspector] _MmdOutlineOffsetFactor ("_MmdOutlineOffsetFactor", Float) = 1.0
+        [HideInInspector] _MmdOutlineOffsetUnits ("_MmdOutlineOffsetUnits", Float) = 1.0
+        // MMD4Mecanim conversion: color mask is configurable for MMD transparent/edge trials.
+        [HideInInspector] _MmdForwardColorMask ("_MmdForwardColorMask", Float) = 15
+        [HideInInspector] _MmdOutlineColorMask ("_MmdOutlineColorMask", Float) = 15
+        [HideInInspector] _NoShadowCasting ("_NoShadowCasting", Float) = 0
 
         [HideInInspector] _UseCustomBlend ("_UseCustomBlend", Float) = 0
 [HideInInspector] _BlendOp ("_BlendOp", Float) = 0
@@ -127,6 +143,9 @@ Shader "toshi/VLiveKit/livetoon"
         _Shininess("Shininess", Range(8,256)) = 64
         _SpecCut("Spec Threshold", Range(0,1)) = 0.6
         _SpecColor("SpecColor", Color) = (1,1,1,1)
+        [HideInInspector] _MmdSpecularColor ("MMD Specular Color", Color) = (0,0,0,1)
+        [HideInInspector] _MmdSpecularIntensity ("MMD Specular Intensity", Float) = 0
+        [HideInInspector] _MmdSpecularPower ("MMD Specular Power", Float) = 64
         _isHair("isHair", Float) = 0
 
         _Sharpness("Sharpness", Float) = 30
@@ -169,6 +188,12 @@ uniform float _ReduSha;
 
 
 uniform float _TransparentThreshold;
+uniform float _TransparentClipThreshold;
+uniform float _TransparentFogAlphaWeight;
+uniform float _TransparentFogIntensity;
+uniform float _MmdTransparentDepthWrite;
+uniform float _MmdForwardColorMask;
+uniform float _NoShadowCasting;
 
 
 
@@ -313,6 +338,9 @@ float _AnisoStrength;
 float _Shininess;
 float _SpecCut;
 float4 _SpecColor;
+float4 _MmdSpecularColor;
+float _MmdSpecularIntensity;
+float _MmdSpecularPower;
 float _isHair;
 float _isCharFace;
 float _Sharpness;
@@ -471,17 +499,30 @@ float LiveToonCutoutDepthValue(float alpha)
 
 float LiveToonTransparentDepthOpacity(float4 mainTex)
 {
-    float threshold = clamp(-20.0, 1.0, _TransparentThreshold);
-    float thresholdAlpha = smoothstep(threshold, 1.0, mainTex.a);
-    float maskedAlpha = thresholdAlpha * mainTex.r;
-    return lerp(maskedAlpha, thresholdAlpha, _Color.a);
+    float textureAlpha = saturate(mainTex.a);
+    float colorAlpha = saturate(_Color.a);
+    // MMD4Mecanim transparent materials multiply texture alpha by the material diffuse alpha.
+    float alpha = saturate(textureAlpha * colorAlpha);
+    float threshold = saturate(_TransparentThreshold);
+    return threshold > 0.0 ? smoothstep(threshold, 1.0, alpha) : alpha;
+}
+
+bool LiveToonShouldWriteMmdTransparentDepth()
+{
+    // MMD4Mecanim conversion: the converter decides which transparent materials participate in HDRP transparent depth passes.
+    return _MmdTransparentDepthWrite > 0.5;
 }
 
 void LiveToonAlphaClipDepthOnly(float4 mainTex)
 {
     if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
-        clip(-1.0);
+        if (!LiveToonShouldWriteMmdTransparentDepth())
+        {
+            clip(-1.0);
+        }
+
+        clip(LiveToonTransparentDepthOpacity(mainTex) - _TransparentClipThreshold);
     }
     else if (_BlendMode == (int)RENDER_MODE_CUTOUT)
     {
@@ -489,7 +530,7 @@ void LiveToonAlphaClipDepthOnly(float4 mainTex)
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
     {
-        clip(LiveToonTransparentDepthOpacity(mainTex) - 0.001);
+        clip(LiveToonTransparentDepthOpacity(mainTex) - _TransparentClipThreshold);
     }
 }
 
@@ -522,11 +563,14 @@ float4 LiveToonTransparentDepthPrepassFragment(LiveToonDepthVaryings input) : SV
 
     if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
-        clip(-1.0);
+        if (!LiveToonShouldWriteMmdTransparentDepth())
+        {
+            clip(-1.0);
+        }
     }
 
     float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, LiveToonApplyUvAnimation(input.uv));
-    LiveToonAlphaClipTransparentDepth(mainTex, _AlphaCutoffPrepass);
+    LiveToonAlphaClipTransparentDepth(mainTex, LiveToonShouldWriteMmdTransparentDepth() ? _TransparentClipThreshold : _AlphaCutoffPrepass);
     return 0;
 }
 
@@ -537,11 +581,14 @@ float4 LiveToonTransparentDepthPostpassFragment(LiveToonDepthVaryings input) : S
 
     if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
-        clip(-1.0);
+        if (!LiveToonShouldWriteMmdTransparentDepth())
+        {
+            clip(-1.0);
+        }
     }
 
     float4 mainTex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, LiveToonApplyUvAnimation(input.uv));
-    LiveToonAlphaClipTransparentDepth(mainTex, _AlphaCutoffPostpass);
+    LiveToonAlphaClipTransparentDepth(mainTex, LiveToonShouldWriteMmdTransparentDepth() ? _TransparentClipThreshold : _AlphaCutoffPostpass);
     return 0;
 }
 
@@ -841,9 +888,6 @@ Tags{"LightMode"="ShadowCaster"}
 float4 _ShadowBias;
 float3 _LightDirection;
 
-sampler3D _DitherMaskLOD;
-float dither;
-
 struct Attributes
 {
 
@@ -966,22 +1010,11 @@ void ShadowPassFragment(Varyings input, out float4 outColor : SV_Target0)
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
     {
-
-			float RTD_TRAN_MAS = (smoothstep(clamp(-20.0,1.0,_TransparentThreshold),1.0,_MainTex_var.a) *_MainTex_var.r);
-			float RTD_TRAN_OPA_Sli = lerp( RTD_TRAN_MAS, smoothstep(clamp(-20.0,1.0,_TransparentThreshold) , 1.0, _MainTex_var.a)  ,_Color.a);
-
-			dither = tex3D(_DitherMaskLOD, float3(input.positionCS.xy * 0.25, RTD_TRAN_OPA_Sli * 0.99)).a;
-                clip(1.0-(1.0-2.0*(0.74-0.5))*(1.0-dither) - 0.5);
+        clip(LiveToonTransparentDepthOpacity(_MainTex_var) - _TransparentClipThreshold);
     }
     else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
     {
-
-			float RTD_TRAN_MAS = (smoothstep(clamp(-20.0,1.0,_TransparentThreshold),1.0,_MainTex_var.a) *_MainTex_var.r);
-			float RTD_TRAN_OPA_Sli = lerp( RTD_TRAN_MAS, smoothstep(clamp(-20.0,1.0,_TransparentThreshold) , 1.0, _MainTex_var.a)  ,_Color.a);
-
-			dither = tex3D(_DitherMaskLOD, float3(input.positionCS.xy * 0.25, RTD_TRAN_OPA_Sli * 0.99)).a;
-                clip(1.0-(1.0-2.0*(0.74-0.5))*(1.0-dither) - 0.5);
-
+        clip(LiveToonTransparentDepthOpacity(_MainTex_var) - _TransparentClipThreshold);
     }
 
 
@@ -1042,17 +1075,24 @@ Tags{"LightMode"="DepthOnly"}
 
             float DepthOnlyTransparentOpacity(float4 mainTex)
             {
-                float threshold = clamp(-20.0, 1.0, _TransparentThreshold);
-                float thresholdAlpha = smoothstep(threshold, 1.0, mainTex.a);
-                float maskedAlpha = thresholdAlpha * mainTex.r;
-                return lerp(maskedAlpha, thresholdAlpha, _Color.a);
+                float textureAlpha = saturate(mainTex.a);
+                float colorAlpha = saturate(_Color.a);
+                // MMD4Mecanim transparent materials multiply texture alpha by the material diffuse alpha.
+                float alpha = saturate(textureAlpha * colorAlpha);
+                float threshold = saturate(_TransparentThreshold);
+                return threshold > 0.0 ? smoothstep(threshold, 1.0, alpha) : alpha;
             }
 
             void DepthOnlyAlphaClip(float4 mainTex)
             {
                 if (_BlendMode == (int)RENDER_MODE_TRANSPARENT)
                 {
-                    clip(-1.0);
+                    if (!LiveToonShouldWriteMmdTransparentDepth())
+                    {
+                        clip(-1.0);
+                    }
+
+                    clip(DepthOnlyTransparentOpacity(mainTex) - _TransparentClipThreshold);
                 }
                 else if (_BlendMode == (int)RENDER_MODE_CUTOUT)
                 {
@@ -1070,7 +1110,7 @@ Tags{"LightMode"="DepthOnly"}
                 }
                 else if (_BlendMode == (int)RENDER_MODE_TRANSPARENT_WITH_ZWRITE)
                 {
-                    clip(DepthOnlyTransparentOpacity(mainTex) - 0.001);
+                    clip(DepthOnlyTransparentOpacity(mainTex) - _TransparentClipThreshold);
                 }
             }
 
@@ -1150,6 +1190,10 @@ Tags{"LightMode"="ForwardOnly"}
             Blend[_SrcBlend][_DstBlend]  
 			ZWrite [_ZWrite]
             ZTest LEqual
+            // MMD4Mecanim conversion: configurable depth bias for MMDLit transparent draw order.
+            Offset [_MmdForwardOffsetFactor], [_MmdForwardOffsetUnits]
+            // MMD4Mecanim conversion: configurable color mask; HDRP conversion keeps RGBA by default.
+            ColorMask [_MmdForwardColorMask]
 
             BlendOp Add, Max
             AlphaToMask [_AlphaToMask]
@@ -1216,7 +1260,10 @@ Tags{"LightMode"="SRPDefaultUnlit"}
             Blend [_SrcBlend] [_DstBlend]
             ZWrite [_ZWrite]
             ZTest LEqual
-            Offset 1, 1
+            // MMD4Mecanim conversion: configurable outline depth bias; defaults keep the old LiveToon behavior.
+            Offset [_MmdOutlineOffsetFactor], [_MmdOutlineOffsetUnits]
+            // MMD4Mecanim conversion: configurable color mask; HDRP conversion keeps RGBA by default.
+            ColorMask [_MmdOutlineColorMask]
             BlendOp Add, Max
             AlphaToMask [_AlphaToMask]
 

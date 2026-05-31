@@ -43,29 +43,65 @@ namespace VLiveKit.LiveToon.Editor
         public Color Color;
     }
 
+    internal struct LiveToonSpecularMaterialState
+    {
+        public Color Color;
+        public float Intensity;
+        public float Power;
+    }
+
     public sealed class ShaderConverterTool : EditorWindow
     {
         private const string DefaultShaderName = LiveToonShaderConverter.DefaultShaderName;
+        private const string OfficialHdrpMmdShaderName = LiveToonShaderConverter.OfficialHdrpMmdShaderName;
         private const string BackupDirectoryName = "LiveToonMaterialBackups";
         private const string BackupSuffix = "_LiveToonBackup";
         private const string ConvertedDirectoryName = "LiveToonMaterials";
         private const string ConvertedSuffix = "_LiveToon";
         private const string GeneratedMaterialsDirectory = "Assets/VLiveKitGenerated/LiveToonMaterials";
+        private const string OfficialHdrpMmdConvertedDirectoryName = "OfficialHDRPMMDMaterials";
+        private const string OfficialHdrpMmdConvertedSuffix = "_OfficialHDRPMMD";
+        private const string OfficialHdrpMmdGeneratedMaterialsDirectory = "Assets/VLiveKitGenerated/OfficialHDRPMMDMaterials";
         private const string SourceMaterialPathPrefix = "VLiveKit.LiveToon.SourceMaterialPath=";
         private const string SourceMaterialGlobalObjectIdPrefix = "VLiveKit.LiveToon.SourceMaterialGlobalObjectId=";
         private const string SourceMaterialNamePrefix = "VLiveKit.LiveToon.SourceMaterialName=";
         private const string SourceMaterialShaderNamePrefix = "VLiveKit.LiveToon.SourceMaterialShaderName=";
+        private const string SourceMaterialRenderQueuePrefix = "VLiveKit.LiveToon.SourceMaterialRenderQueue=";
         private const string TransparentDepthPrepassName = "TransparentDepthPrepass";
         private const string TransparentDepthPostpassName = "TransparentDepthPostpass";
         private const string KeyOutlineWidthWorld = "MTOON_OUTLINE_WIDTH_WORLD";
         private const string KeyOutlineWidthScreen = "MTOON_OUTLINE_WIDTH_SCREEN";
         private const string KeyOutlineColorFixed = "MTOON_OUTLINE_COLOR_FIXED";
         private const string KeyOutlineColorMixed = "MTOON_OUTLINE_COLOR_MIXED";
+        private const int GeometryQueue = 2000;
+        private const int GeometryLastQueue = 2500;
+        private const int LiveToonFogBaseQueue = 2225;
+        private const int AlphaTestQueue = 2450;
+        private const int TransparentQueue = 3000;
         private const int TransparentWithZWriteQueue = 2501;
+        private const int MmdOpaqueDefaultSourceQueue = GeometryQueue + 1;
+        private const int MmdTransparentDefaultSourceQueue = GeometryQueue + 2;
+        private const int MToonTransparentQueueSpan = 50;
+        private const int MmdHdrpTransparentQueueSpan = GeometryLastQueue - GeometryQueue + 1;
         private const float DefaultIndirectLightIntensity = 0.35f;
         private const float DefaultReflectionProbeIntensity = 0.25f;
         private const float DefaultReflectionProbeSmoothness = 0.35f;
         private const float MmdOutlineWidthScale = 100f;
+        private const float MmdTransparentForwardOffsetFactor = -0.1f;
+        private const float MmdTransparentForwardOffsetUnits = -1f;
+        private const float MmdDefaultForwardOffsetFactor = 0f;
+        private const float MmdDefaultForwardOffsetUnits = 0f;
+        private const float MmdOutlineOffsetFactor = 0.1f;
+        private const float MmdOutlineOffsetUnits = 1f;
+        private const float MmdDefaultOutlineOffsetFactor = 1f;
+        private const float MmdDefaultOutlineOffsetUnits = 1f;
+        private const float MmdTransparentClipThreshold = 1f / 255f;
+        private const float MmdTransparentFogAlphaWeight = 0f;
+        private const float MmdTransparentFogIntensity = 0f;
+        private const float MmdColorMaskRgb = 14f;
+        private const float MmdColorMaskRgba = 15f;
+        private const float MmdDefaultSpecularPower = 64f;
+        private const float MmdVisibleSpecularThreshold = 0.001f;
         private static readonly char[] AdditionalInvalidAssetFileNameChars = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
         private static readonly float BlendZero = (float)UnityEngine.Rendering.BlendMode.Zero;
         private static readonly float BlendOne = (float)UnityEngine.Rendering.BlendMode.One;
@@ -76,6 +112,7 @@ namespace VLiveKit.LiveToon.Editor
         private GameObject selectedObject;
         private Shader shaderToUse;
         private LiveToonShaderConversionSource conversionSource;
+        private MmdTransparentFogMode mmdTransparentFogMode = MmdTransparentFogMode.HdrpMmdStackRangeWithSurfaceFog;
         private bool createMaterialBackups;
         private bool disableOutlineOnConvert;
 
@@ -98,7 +135,11 @@ namespace VLiveKit.LiveToon.Editor
             EditorGUILayout.LabelField("Base Settings", EditorStyles.boldLabel);
             selectedObject = (GameObject)EditorGUILayout.ObjectField("Selected Object", selectedObject, typeof(GameObject), true);
             shaderToUse = (Shader)EditorGUILayout.ObjectField("Shader To Use", shaderToUse, typeof(Shader), false);
-            conversionSource = (LiveToonShaderConversionSource)EditorGUILayout.EnumPopup("Conversion Source", conversionSource);
+            conversionSource = (LiveToonShaderConversionSource)EditorGUILayout.EnumPopup("Conversion Mode", conversionSource);
+            using (new EditorGUI.DisabledScope(!UsesMmdTransparentFogOption(conversionSource)))
+            {
+                mmdTransparentFogMode = (MmdTransparentFogMode)EditorGUILayout.EnumPopup("MMD Transparent Path", mmdTransparentFogMode);
+            }
 
             EditorGUILayout.Space();
             createMaterialBackups = EditorGUILayout.ToggleLeft("Also create legacy backup copies", createMaterialBackups);
@@ -141,7 +182,7 @@ namespace VLiveKit.LiveToon.Editor
                 return;
             }
 
-            var result = ConvertShadersForObject(selectedObject, shaderToUse, createMaterialBackups, disableOutlineOnConvert, conversionSource);
+            var result = ConvertShadersForObject(selectedObject, shaderToUse, createMaterialBackups, disableOutlineOnConvert, conversionSource, mmdTransparentFogMode);
             ShowNotification(new GUIContent($"Converted {result.ConvertedCount}, assigned {result.AssignedCount}"));
             Debug.Log(result.ToConversionLog());
         }
@@ -193,7 +234,25 @@ namespace VLiveKit.LiveToon.Editor
             bool disableOutlineOnConvert,
             LiveToonShaderConversionSource conversionSource)
         {
+            return ConvertShadersForObject(
+                root,
+                targetShader,
+                createMaterialBackups,
+                disableOutlineOnConvert,
+                conversionSource,
+                MmdTransparentFogMode.HdrpMmdStackRangeWithSurfaceFog);
+        }
+
+        internal static LiveToonMaterialConversionResult ConvertShadersForObject(
+            GameObject root,
+            Shader targetShader,
+            bool createMaterialBackups,
+            bool disableOutlineOnConvert,
+            LiveToonShaderConversionSource conversionSource,
+            MmdTransparentFogMode mmdTransparentFogMode)
+        {
             var result = new LiveToonMaterialConversionResult();
+            targetShader = ResolveTargetShader(targetShader, conversionSource);
             if (root == null || targetShader == null)
             {
                 return result;
@@ -227,7 +286,7 @@ namespace VLiveKit.LiveToon.Editor
                             result.BackupCount++;
                         }
 
-                        convertedMaterial = CreateConvertedMaterial(sourceMaterial);
+                        convertedMaterial = CreateConvertedMaterial(sourceMaterial, conversionSource);
                         if (convertedMaterial == null)
                         {
                             if (skippedMaterials.Add(sourceMaterial))
@@ -238,7 +297,7 @@ namespace VLiveKit.LiveToon.Editor
                             continue;
                         }
 
-                        ConvertMaterial(convertedMaterial, targetShader, conversionSource);
+                        ConvertMaterial(convertedMaterial, targetShader, conversionSource, mmdTransparentFogMode);
                         if (disableOutlineOnConvert)
                         {
                             DisableOutline(convertedMaterial);
@@ -351,15 +410,29 @@ namespace VLiveKit.LiveToon.Editor
             return result;
         }
 
+        private static Shader ResolveTargetShader(Shader targetShader, LiveToonShaderConversionSource conversionSource)
+        {
+            if (conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD)
+            {
+                return Shader.Find(OfficialHdrpMmdShaderName);
+            }
+
+            return targetShader;
+        }
+
         private static void ConvertMaterial(
             Material material,
             Shader targetShader,
-            LiveToonShaderConversionSource conversionSource)
+            LiveToonShaderConversionSource conversionSource,
+            MmdTransparentFogMode mmdTransparentFogMode)
         {
             switch (conversionSource)
             {
                 case LiveToonShaderConversionSource.MMD4Mecanim:
-                    ConvertMaterialFromMmd4Mecanim(material, targetShader);
+                    ConvertMaterialFromMmd4Mecanim(material, targetShader, mmdTransparentFogMode);
+                    break;
+                case LiveToonShaderConversionSource.OfficialHDRPMMD:
+                    ConvertMaterialToOfficialHdrpMmd(material, targetShader);
                     break;
                 default:
                     ConvertMaterialLikeLoadModel(material, targetShader);
@@ -393,26 +466,33 @@ namespace VLiveKit.LiveToon.Editor
             }
 
             ApplyRenderModeState(material, blendMode);
+            ApplyMToonSpecularState(material);
             RestoreOutlineProperties(material, outlineState);
             ApplyOutlineModeState(material);
             ApplyEnvironmentLightingDefaults(material);
             LiveToonDefaultAssets.EnsureDefaultJitterTexture(material);
         }
 
-        private static void ConvertMaterialFromMmd4Mecanim(Material material, Shader targetShader)
+        private static void ConvertMaterialFromMmd4Mecanim(
+            Material material,
+            Shader targetShader,
+            MmdTransparentFogMode mmdTransparentFogMode)
         {
-            var materialName = GetMmdSourceMaterialName(material);
             var sourceShaderName = GetMmdSourceShaderName(material);
-            var sourceRenderQueue = GetMmdRenderQueue(material);
-            var blendMode = GetMmdBlendMode(material, materialName, sourceShaderName);
+            var sourceRenderQueue = GetMmdSourceRenderQueue(material);
+            var blendMode = GetMmdBlendMode(material, sourceShaderName);
+            var usesMmdTransparentShader = IsMmdTransparentShader(sourceShaderName);
             var color = GetMmdBaseColor(material);
-            var shadeColor = GetMmdShadeColor(material, color);
             var mainTexture = GetMmdMainTexture(material);
+            var shadeColor = GetMmdShadeColor(material, color);
             var sphereAddTexture = GetTexture(material, "_SphereAdd");
-            var outlineState = CaptureMmdOutlineState(material, materialName, sourceShaderName);
+            var outlineState = CaptureMmdOutlineState(material, sourceShaderName, allowPropertyOnlyOutline: false);
+            var usesMmdOutline = outlineState.WidthMode > 0.5f;
             var cullMode = GetMmdCullMode(sourceShaderName);
             var emissionMap = GetMmdEmissionMap(material);
             var emissionColor = GetMmdEmissionColor(material, emissionMap);
+            var specularState = CaptureMmdSpecularState(material);
+            var noShadowCasting = GetFloat(material, "_NoShadowCasting", ShaderNameContains(sourceShaderName, "NoShadowCasting") ? 1f : 0f);
 
             material.shader = targetShader;
 
@@ -429,13 +509,98 @@ namespace VLiveKit.LiveToon.Editor
             SetFloatIfPresent(material, "_ShadeShift", -0.25f);
             SetFloatIfPresent(material, "_ReceiveShadowRate", 0.35f);
             SetFloatIfPresent(material, "_CullMode", cullMode);
+            SetFloatIfPresent(material, "_NoShadowCasting", noShadowCasting);
 
             ApplyRenderModeState(material, blendMode);
-            ApplyMmdRenderQueueState(material, blendMode, sourceRenderQueue);
+            ApplyMmdSpecularState(material, specularState);
+            ApplyMmdAlphaState(material, blendMode, usesMmdTransparentShader, mmdTransparentFogMode);
+            ApplyMmdDepthOffsetState(material, usesMmdTransparentShader, usesMmdOutline);
+            ApplyMmdRenderQueueState(material, blendMode, sourceRenderQueue, usesMmdTransparentShader, mmdTransparentFogMode);
             RestoreOutlineProperties(material, outlineState);
             ApplyOutlineModeState(material);
             ApplyEnvironmentLightingDefaults(material);
             LiveToonDefaultAssets.EnsureDefaultJitterTexture(material);
+        }
+
+        private static void ConvertMaterialToOfficialHdrpMmd(Material material, Shader targetShader)
+        {
+            var sourceShaderName = GetMmdSourceShaderName(material);
+            var sourceRenderQueue = GetMmdSourceRenderQueue(material);
+            var blendMode = GetOfficialHdrpMmdTargetBlendMode(material, sourceShaderName, sourceRenderQueue);
+            var isTransparent = Mathf.RoundToInt(blendMode) == 2;
+            var isCutout = Mathf.RoundToInt(blendMode) == 1;
+            var cullMode = GetMmdCullMode(sourceShaderName);
+            var diffuse = GetMmdBaseColor(material);
+            var specular = GetColor(material, "_Specular", Color.black);
+            var ambient = GetColor(material, "_Ambient", new Color(0.5f, 0.5f, 0.5f, 1f));
+            var shininess = GetFloat(material, "_Shininess", 80f);
+            var shadowLum = GetFloat(material, "_ShadowLum", 1.5f);
+            var ambientToDiffuse = GetFloat(material, "_AmbientToDiffuse", 5f);
+            var edgeColor = GetColor(material, "_EdgeColor", Color.black);
+            var edgeScale = GetFloat(material, "_EdgeScale", 0f);
+            var edgeSize = GetFloat(material, "_EdgeSize", 0f);
+            var mainTexture = GetMmdMainTexture(material);
+            var toonTexture = GetTexture(material, "_ToonTex");
+            var sphereCube = GetTexture(material, "_SphereCube");
+            var emissive = GetColor(material, "_Emissive", Color.black);
+            var autoLuminousPower = GetFloat(material, "_ALPower", 0f);
+            var emissionColor = GetMmdEmissionColor(material, null);
+            var toonTone = GetVector(material, "_ToonTone", new Vector4(1f, 0.5f, 0.5f, 0f));
+            var noShadowCasting = GetFloat(material, "_NoShadowCasting", ShaderNameContains(sourceShaderName, "NoShadowCasting") ? 1f : 0f);
+            var hasSpecular = HasVisibleRgb(specular) || material.IsKeywordEnabled("SPECULAR_ON");
+            var hasEmission = HasVisibleRgb(emissive) || material.IsKeywordEnabled("EMISSIVE_ON");
+            var hasSphereMul = material.IsKeywordEnabled("SPHEREMAP_MUL");
+            var hasSphereAdd = material.IsKeywordEnabled("SPHEREMAP_ADD") || (!hasSphereMul && sphereCube != null);
+            var hasSelfShadow = material.IsKeywordEnabled("SELFSHADOW_ON");
+            var hasAmbientToDiffuse = material.IsKeywordEnabled("AMB2DIFF_ON");
+
+            material.shader = targetShader;
+
+            SetColorIfPresent(material, "_Diffuse", diffuse);
+            SetColorIfPresent(material, "_Color", diffuse);
+            SetColorIfPresent(material, "_BaseColor", diffuse);
+            SetColorIfPresent(material, "_Specular", specular);
+            SetColorIfPresent(material, "_SpecularColor", specular);
+            SetColorIfPresent(material, "_Ambient", ambient);
+            SetColorIfPresent(material, "_EdgeColor", edgeColor);
+            SetTextureIfPresent(material, "_MainTex", mainTexture);
+            SetTextureIfPresent(material, "_BaseColorMap", mainTexture);
+            SetTextureIfPresent(material, "_ToonTex", toonTexture);
+            if (sphereCube is Cubemap)
+            {
+                SetTextureIfPresent(material, "_SphereCube", sphereCube);
+            }
+
+            SetColorIfPresent(material, "_Emissive", emissive);
+            SetColorIfPresent(material, "_EmissiveColor", emissionColor);
+            SetColorIfPresent(material, "_EmissiveColorLDR", ClampColor01(emissionColor));
+            SetFloatIfPresent(material, "_ALPower", autoLuminousPower);
+            SetFloatIfPresent(material, "_Shininess", shininess);
+            SetFloatIfPresent(material, "_ShadowLum", shadowLum);
+            SetFloatIfPresent(material, "_AmbientToDiffuse", ambientToDiffuse);
+            SetFloatIfPresent(material, "_EdgeScale", edgeScale);
+            SetFloatIfPresent(material, "_EdgeSize", edgeSize);
+            SetFloatIfPresent(material, "_NoShadowCasting", noShadowCasting);
+            SetVectorIfPresent(material, "_ToonTone", toonTone);
+
+            ApplyOfficialHdrpMmdRenderState(material, blendMode, cullMode, sourceRenderQueue);
+
+            SetKeyword(material, "_TOON", true);
+            SetKeyword(material, "SPECULAR_ON", hasSpecular);
+            SetKeyword(material, "EMISSIVE_ON", hasEmission);
+            SetKeyword(material, "SPHEREMAP_MUL", hasSphereMul);
+            SetKeyword(material, "SPHEREMAP_ADD", hasSphereAdd && !hasSphereMul);
+            SetKeyword(material, "SELFSHADOW_ON", hasSelfShadow);
+            SetKeyword(material, "AMB2DIFF_ON", hasAmbientToDiffuse);
+            SetKeyword(material, "_ALPHATEST_ON", isCutout);
+            SetKeyword(material, "_SURFACE_TYPE_TRANSPARENT", isTransparent);
+            SetKeyword(material, "_BLENDMODE_ALPHA", isTransparent);
+            SetKeyword(material, "_BLENDMODE_ADD", false);
+            SetKeyword(material, "_BLENDMODE_PRE_MULTIPLY", false);
+            SetKeyword(material, "_ENABLE_FOG_ON_TRANSPARENT", isTransparent);
+            SetKeyword(material, "_DOUBLESIDED_ON", Mathf.RoundToInt(cullMode) == 0);
+            SetKeyword(material, "_EMISSIVE_COLOR_MAP", false);
+            SetKeyword(material, "_MATERIAL_FEATURE_SPECULAR_COLOR", hasSpecular);
         }
 
         private static string GetMmdSourceShaderName(Material material)
@@ -455,22 +620,17 @@ namespace VLiveKit.LiveToon.Editor
             return GetConvertedMaterialSourceShaderName(materialPath) ?? shaderName;
         }
 
-        private static string GetMmdSourceMaterialName(Material material)
-        {
-            var materialName = material != null ? material.name : string.Empty;
-            return RemoveConvertedSuffix(materialName) ?? materialName;
-        }
-
         private static Color GetMmdBaseColor(Material material)
         {
-            var legacyColor = GetColor(material, "_Color", Color.white);
+            var diffuseColor = GetColor(material, "_Diffuse", Color.white);
+            var legacyColor = GetColor(material, "_Color", diffuseColor);
             var baseColor = GetColor(material, "_BaseColor", legacyColor);
             if (!HasVisibleRgb(baseColor))
             {
-                baseColor = legacyColor;
+                baseColor = HasVisibleRgb(legacyColor) ? legacyColor : diffuseColor;
             }
 
-            baseColor.a = legacyColor.a;
+            baseColor.a = material.HasProperty("_Diffuse") ? diffuseColor.a : legacyColor.a;
             return ClampColor01(baseColor);
         }
 
@@ -486,11 +646,16 @@ namespace VLiveKit.LiveToon.Editor
             return emissionMap != null ? emissionMap : GetTexture(material, "_EmissiveColorMap");
         }
 
-        private static float GetMmdBlendMode(Material material, string materialName, string sourceShaderName)
+        private static float GetMmdBlendMode(Material material, string sourceShaderName)
         {
-            if (IsMmdTransparentMaterial(materialName, sourceShaderName))
+            if (IsMmdTransparentShader(sourceShaderName))
             {
-                return GetMmdTransparentBlendMode(materialName);
+                return 2f;
+            }
+
+            if (IsMmd4MecanimShader(sourceShaderName))
+            {
+                return 0f;
             }
 
             var blendMode = GetFloat(material, "_BlendMode", float.NaN);
@@ -515,32 +680,41 @@ namespace VLiveKit.LiveToon.Editor
             return 0f;
         }
 
-        private static bool IsMmdTransparentMaterial(string materialName, string sourceShaderName)
+        private static float GetOfficialHdrpMmdTargetBlendMode(Material material, string sourceShaderName, float sourceRenderQueue)
         {
-            if (ShaderNameContains(sourceShaderName, "Transparent"))
+            if (IsMmdTransparentShader(sourceShaderName))
             {
-                return true;
+                return 2f;
             }
 
-            return IsMmdOverlayTransparentMaterial(materialName);
+            var renderQueue = sourceRenderQueue >= 0f ? sourceRenderQueue : material.renderQueue;
+            var surfaceType = GetFloat(material, "_SurfaceType", 0f);
+            var srcBlend = Mathf.RoundToInt(GetFloat(material, "_SrcBlend", BlendOne));
+            var dstBlend = Mathf.RoundToInt(GetFloat(material, "_DstBlend", BlendZero));
+            var isAlphaBlendState = srcBlend == Mathf.RoundToInt(BlendSrcAlpha)
+                || dstBlend == Mathf.RoundToInt(BlendOneMinusSrcAlpha);
+            var alphaCutoffEnabled = GetFloat(material, "_AlphaCutoffEnable", 0f) > 0.5f
+                || material.IsKeywordEnabled("_ALPHATEST_ON");
+            var color = GetMmdBaseColor(material);
+
+            if (surfaceType >= 0.5f || isAlphaBlendState || renderQueue >= TransparentQueue || color.a < 0.99f)
+            {
+                // Official HDRP MMD uses one shader for opaque and transparent materials.
+                // Recover transparent state from HDRP/Lit-style properties when shader name no longer contains "Transparent".
+                return 2f;
+            }
+
+            if (alphaCutoffEnabled || renderQueue >= AlphaTestQueue)
+            {
+                return 1f;
+            }
+
+            return 0f;
         }
 
-        private static float GetMmdTransparentBlendMode(string materialName)
+        private static bool IsMmdTransparentShader(string sourceShaderName)
         {
-            return IsMmdOverlayTransparentMaterial(materialName)
-                ? 2f
-                : 1f;
-        }
-
-        private static bool IsMmdOverlayTransparentMaterial(string materialName)
-        {
-            materialName = materialName ?? string.Empty;
-            return materialName.IndexOf("hairshadow", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("eye_hi", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("eyehi", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("cheek", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("lens", StringComparison.OrdinalIgnoreCase) >= 0;
+            return ShaderNameContains(sourceShaderName, "Transparent");
         }
 
         private static float GetMmdCullMode(string sourceShaderName)
@@ -554,24 +728,191 @@ namespace VLiveKit.LiveToon.Editor
             return renderQueue >= 0f ? renderQueue : material.renderQueue;
         }
 
-        private static void ApplyMmdRenderQueueState(Material material, float blendMode, float sourceRenderQueue)
+        private static float GetMmdSourceRenderQueue(Material material)
         {
-            var sourceQueueOffset = GetMmdRenderQueueOffset(sourceRenderQueue);
+            var renderQueue = GetMmdRenderQueue(material);
+            if (renderQueue >= 0f && renderQueue != material.renderQueue)
+            {
+                return renderQueue;
+            }
+
+            var materialPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(material));
+            var storedRenderQueue = GetConvertedMaterialSourceRenderQueue(materialPath);
+            return storedRenderQueue >= 0f ? storedRenderQueue : renderQueue;
+        }
+
+        private static void ApplyOfficialHdrpMmdRenderState(Material material, float blendMode, float cullMode, float sourceRenderQueue)
+        {
+            var blendModeInt = Mathf.RoundToInt(blendMode);
+            var isCutout = blendModeInt == 1;
+            var isTransparent = blendModeInt == 2;
+            var renderQueue = sourceRenderQueue >= 0f
+                ? Mathf.RoundToInt(sourceRenderQueue)
+                : isTransparent
+                    ? TransparentQueue
+                    : isCutout
+                        ? AlphaTestQueue
+                        : GeometryQueue;
+
+            SetFloatIfPresent(material, "_SurfaceType", isTransparent ? 1f : 0f);
+            SetFloatIfPresent(material, "_BlendMode", isTransparent ? 0f : 0f);
+            SetFloatIfPresent(material, "_SrcBlend", isTransparent ? BlendSrcAlpha : BlendOne);
+            SetFloatIfPresent(material, "_DstBlend", isTransparent ? BlendOneMinusSrcAlpha : BlendZero);
+            SetFloatIfPresent(material, "_AlphaSrcBlend", BlendOne);
+            SetFloatIfPresent(material, "_AlphaDstBlend", isTransparent ? BlendOneMinusSrcAlpha : BlendZero);
+            SetFloatIfPresent(material, "_ZWrite", isTransparent ? 0f : 1f);
+            SetFloatIfPresent(material, "_TransparentZWrite", 0f);
+            SetFloatIfPresent(material, "_CullMode", cullMode);
+            SetFloatIfPresent(material, "_CullModeForward", cullMode);
+            SetFloatIfPresent(material, "_TransparentCullMode", cullMode);
+            SetFloatIfPresent(material, "_OpaqueCullMode", cullMode);
+            SetFloatIfPresent(material, "_EnableFogOnTransparent", isTransparent ? 1f : 0f);
+            SetFloatIfPresent(material, "_AlphaCutoffEnable", isCutout ? 1f : 0f);
+            SetFloatIfPresent(material, "_AlphaToMask", 0f);
+            SetFloatIfPresent(material, "_TransparentDepthPrepassEnable", 0f);
+            SetFloatIfPresent(material, "_TransparentDepthPostpassEnable", 0f);
+            SetFloatIfPresent(material, "_TransparentBackfaceEnable", 0f);
+            SetFloatIfPresent(material, "_RenderQueue", renderQueue);
+            material.renderQueue = renderQueue;
+        }
+
+        private static void ApplyMmdRenderQueueState(
+            Material material,
+            float blendMode,
+            float sourceRenderQueue,
+            bool usesMmdTransparentShader,
+            MmdTransparentFogMode mmdTransparentFogMode)
+        {
+            if (UsesHdrpMmdStackRange(mmdTransparentFogMode))
+            {
+                var fallbackSourceQueue = Mathf.RoundToInt(blendMode) == 2
+                    ? MmdTransparentDefaultSourceQueue
+                    : MmdOpaqueDefaultSourceQueue;
+
+                material.renderQueue = GetHdrpQueueFromMmdSourceQueue(sourceRenderQueue, fallbackSourceQueue);
+                return;
+            }
+
+            if (usesMmdTransparentShader
+                && Mathf.RoundToInt(blendMode) == 2
+                && UsesHdrpTransparentRangeForMmd(mmdTransparentFogMode))
+            {
+                material.renderQueue = GetHdrpTransparentQueueFromMmdSourceQueue(sourceRenderQueue);
+                return;
+            }
+
+            var mappedSourceRenderQueue = GetLiveToonQueueFromMmdSourceQueue(sourceRenderQueue);
+            if (mappedSourceRenderQueue >= 0)
+            {
+                material.renderQueue = mappedSourceRenderQueue;
+                return;
+            }
+
             switch ((int)blendMode)
             {
+                case 0:
+                    material.renderQueue = GetLiveToonQueueFromMmdSourceQueue(MmdOpaqueDefaultSourceQueue);
+                    break;
                 case 1:
-                    material.renderQueue = 2450 + sourceQueueOffset;
+                    material.renderQueue = AlphaTestQueue;
                     break;
                 case 2:
-                    material.renderQueue = 3000 + sourceQueueOffset;
+                    material.renderQueue = usesMmdTransparentShader && sourceRenderQueue < 0f
+                        ? GetLiveToonQueueFromMmdSourceQueue(MmdTransparentDefaultSourceQueue)
+                        : TransparentQueue + GetMmdTransparentRenderQueueOffset(sourceRenderQueue);
                     break;
                 case 3:
-                    material.renderQueue = TransparentWithZWriteQueue + sourceQueueOffset;
+                    material.renderQueue = TransparentWithZWriteQueue + GetMmdTransparentWithZWriteRenderQueueOffset(sourceRenderQueue);
                     break;
             }
         }
 
-        private static int GetMmdRenderQueueOffset(float sourceRenderQueue)
+        private static int GetLiveToonQueueFromMmdSourceQueue(float sourceRenderQueue)
+        {
+            if (sourceRenderQueue < 0f)
+            {
+                return -1;
+            }
+
+            var roundedRenderQueue = Mathf.RoundToInt(sourceRenderQueue);
+            if (roundedRenderQueue >= GeometryQueue && roundedRenderQueue < AlphaTestQueue)
+            {
+                // MMD4Mecanim conversion: preserve the exact Geometry+N queue because MMD interleaves opaque and transparent materials there.
+                return roundedRenderQueue;
+            }
+
+            return -1;
+        }
+
+        private static int GetHdrpTransparentQueueFromMmdSourceQueue(float sourceRenderQueue)
+        {
+            return GetHdrpQueueFromMmdSourceQueue(sourceRenderQueue, MmdTransparentDefaultSourceQueue);
+        }
+
+        private static int GetHdrpQueueFromMmdSourceQueue(float sourceRenderQueue, int fallbackSourceQueue)
+        {
+            var roundedRenderQueue = sourceRenderQueue >= 0f
+                ? Mathf.RoundToInt(sourceRenderQueue)
+                : fallbackSourceQueue;
+
+            if (roundedRenderQueue >= GeometryQueue && roundedRenderQueue <= GeometryLastQueue)
+            {
+                // MMD4Mecanim conversion: move the whole Geometry+N stack after HDRP opaque fog while preserving its relative order.
+                // Moving only transparent materials breaks models that interleave opaque and transparent sleeves in the same MMD queue band.
+                return TransparentQueue + Mathf.Clamp(roundedRenderQueue - GeometryQueue, 0, MmdHdrpTransparentQueueSpan - 1);
+            }
+
+            if (roundedRenderQueue >= TransparentQueue - MmdHdrpTransparentQueueSpan
+                && roundedRenderQueue <= TransparentQueue + MmdHdrpTransparentQueueSpan)
+            {
+                return roundedRenderQueue;
+            }
+
+            return TransparentQueue + Mathf.Clamp(fallbackSourceQueue - GeometryQueue, 0, MmdHdrpTransparentQueueSpan - 1);
+        }
+
+        private static bool UsesHdrpMmdStackRange(MmdTransparentFogMode mmdTransparentFogMode)
+        {
+            return mmdTransparentFogMode == MmdTransparentFogMode.HdrpMmdStackRangeWithSurfaceFog
+                || mmdTransparentFogMode == MmdTransparentFogMode.HdrpMmdStackRangeNoSurfaceFog;
+        }
+
+        private static bool UsesHdrpTransparentRangeForMmd(MmdTransparentFogMode mmdTransparentFogMode)
+        {
+            return mmdTransparentFogMode == MmdTransparentFogMode.HdrpTransparentRangeNoSurfaceFog
+                || mmdTransparentFogMode == MmdTransparentFogMode.HdrpTransparentRangeWithSurfaceFog;
+        }
+
+        private static bool UsesMmdSurfaceFog(float blendMode, bool usesMmdTransparentShader, MmdTransparentFogMode mmdTransparentFogMode)
+        {
+            if (mmdTransparentFogMode == MmdTransparentFogMode.HdrpMmdStackRangeWithSurfaceFog)
+            {
+                return true;
+            }
+
+            return usesMmdTransparentShader
+                && Mathf.RoundToInt(blendMode) == 2
+                && (mmdTransparentFogMode == MmdTransparentFogMode.PreserveMmdQueueWithSurfaceFog
+                    || mmdTransparentFogMode == MmdTransparentFogMode.HdrpTransparentRangeWithSurfaceFog);
+        }
+
+        private static int GetMmdTransparentRenderQueueOffset(float sourceRenderQueue)
+        {
+            if (sourceRenderQueue < 0f)
+            {
+                return 0;
+            }
+
+            var roundedRenderQueue = Mathf.RoundToInt(sourceRenderQueue);
+            if (roundedRenderQueue >= TransparentQueue - MToonTransparentQueueSpan + 1 && roundedRenderQueue <= TransparentQueue)
+            {
+                return roundedRenderQueue - TransparentQueue;
+            }
+
+            return 0;
+        }
+
+        private static int GetMmdTransparentWithZWriteRenderQueueOffset(float sourceRenderQueue)
         {
             if (sourceRenderQueue < 0f)
             {
@@ -581,15 +922,75 @@ namespace VLiveKit.LiveToon.Editor
             var roundedRenderQueue = Mathf.RoundToInt(sourceRenderQueue);
             if (roundedRenderQueue >= 2000 && roundedRenderQueue < 2500)
             {
-                return Mathf.Clamp(roundedRenderQueue - 2000, 0, 99);
+                return Mathf.Clamp(roundedRenderQueue - 2000, 0, MToonTransparentQueueSpan - 1);
             }
 
-            if (roundedRenderQueue >= 3000 && roundedRenderQueue < 3100)
+            if (roundedRenderQueue >= TransparentWithZWriteQueue
+                && roundedRenderQueue < TransparentWithZWriteQueue + MToonTransparentQueueSpan)
             {
-                return roundedRenderQueue - 3000;
+                return roundedRenderQueue - TransparentWithZWriteQueue;
             }
 
             return 0;
+        }
+
+        private static void ApplyMmdAlphaState(
+            Material material,
+            float blendMode,
+            bool usesMmdTransparentShader,
+            MmdTransparentFogMode mmdTransparentFogMode)
+        {
+            var roundedBlendMode = Mathf.RoundToInt(blendMode);
+            var usesMmdSurfaceFog = UsesMmdSurfaceFog(blendMode, usesMmdTransparentShader, mmdTransparentFogMode);
+            SetFloatIfPresent(material, "_TransparentThreshold", 0f);
+            // MMD4Mecanim conversion: MMDLit clips transparent fragments below 1/255 before blending/depth writes.
+            SetFloatIfPresent(material, "_TransparentClipThreshold", usesMmdTransparentShader ? MmdTransparentClipThreshold : 0.001f);
+            SetFloatIfPresent(material, "_TransparentFogAlphaWeight", usesMmdTransparentShader ? MmdTransparentFogAlphaWeight : 0f);
+            // MMD4Mecanim conversion: only fog in-shader when the material is rendered after HDRP's opaque fog pass.
+            SetFloatIfPresent(material, "_TransparentFogIntensity", usesMmdSurfaceFog ? 1f : 0f);
+            SetFloatIfPresent(material, "_MmdTransparentDepthWrite", 0f);
+            SetKeyword(material, "_ENABLE_FOG_ON_TRANSPARENT", usesMmdSurfaceFog);
+
+            if (usesMmdTransparentShader && roundedBlendMode == 2)
+            {
+                if (usesMmdSurfaceFog)
+                {
+                    // MMD4Mecanim conversion: keep the MMD Offset/ZWrite path, but fog in the forward pass after HDRP's opaque fog.
+                    SetFloatIfPresent(material, "_TransparentFogIntensity", 1f);
+                }
+                else
+                {
+                    // MMD4Mecanim conversion: preserve the original Geometry+N-style path and let HDRP opaque fog handle non-shifted queues.
+                    SetFloatIfPresent(material, "_TransparentFogIntensity", MmdTransparentFogIntensity);
+                }
+
+                // MMD4Mecanim conversion: keep MMD's forward ZWrite + Offset path for sleeve and hair ordering.
+                SetFloatIfPresent(material, "_MmdTransparentDepthWrite", 0f);
+                SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 1f, alphaToMask: 0f);
+                SetTransparentDepthPasses(material, false);
+                return;
+            }
+
+            if (Mathf.RoundToInt(blendMode) == 3)
+            {
+                SetFloatIfPresent(material, "_AlphaCutoffPrepass", 0.001f);
+                SetFloatIfPresent(material, "_AlphaCutoffPostpass", 0.001f);
+            }
+        }
+
+        private static void ApplyMmdDepthOffsetState(Material material, bool usesMmdTransparentShader, bool usesMmdOutline)
+        {
+            // MMD4Mecanim conversion: MMDLit-Transparent uses Offset -0.1, -1 to pull transparent depth slightly forward.
+            SetFloatIfPresent(material, "_MmdForwardOffsetFactor", usesMmdTransparentShader ? MmdTransparentForwardOffsetFactor : MmdDefaultForwardOffsetFactor);
+            SetFloatIfPresent(material, "_MmdForwardOffsetUnits", usesMmdTransparentShader ? MmdTransparentForwardOffsetUnits : MmdDefaultForwardOffsetUnits);
+
+            // MMD4Mecanim conversion: MMDLit-Edge uses Offset 0.1, 1, while LiveToon defaults to its original 1, 1.
+            SetFloatIfPresent(material, "_MmdOutlineOffsetFactor", usesMmdOutline ? MmdOutlineOffsetFactor : MmdDefaultOutlineOffsetFactor);
+            SetFloatIfPresent(material, "_MmdOutlineOffsetUnits", usesMmdOutline ? MmdOutlineOffsetUnits : MmdDefaultOutlineOffsetUnits);
+
+            // MMD4Mecanim conversion: MMDLit transparent/edge passes use ColorMask RGB, which avoids writing transparent silhouettes into HDRP's alpha buffer.
+            SetFloatIfPresent(material, "_MmdForwardColorMask", usesMmdTransparentShader ? MmdColorMaskRgb : MmdColorMaskRgba);
+            SetFloatIfPresent(material, "_MmdOutlineColorMask", usesMmdOutline ? MmdColorMaskRgb : MmdColorMaskRgba);
         }
 
         private static Color GetMmdShadeColor(Material material, Color litColor)
@@ -601,11 +1002,14 @@ namespace VLiveKit.LiveToon.Editor
             return ClampColor01(shadeColor);
         }
 
-        private static LiveToonOutlineMaterialState CaptureMmdOutlineState(Material material, string materialName, string sourceShaderName)
+        private static LiveToonOutlineMaterialState CaptureMmdOutlineState(
+            Material material,
+            string sourceShaderName,
+            bool allowPropertyOnlyOutline)
         {
             var edgeSize = GetFloat(material, "_EdgeSize", 0f);
             var edgeColor = GetColor(material, "_EdgeColor", Color.black);
-            var usesOutline = UsesMmdOutline(materialName, sourceShaderName) && edgeSize > 0f && edgeColor.a > 0.001f;
+            var usesOutline = (allowPropertyOnlyOutline || UsesMmdOutline(sourceShaderName)) && edgeSize > 0f && edgeColor.a > 0.001f;
 
             return new LiveToonOutlineMaterialState
             {
@@ -620,36 +1024,25 @@ namespace VLiveKit.LiveToon.Editor
             };
         }
 
-        private static bool UsesMmdOutline(string materialName, string sourceShaderName)
+        private static bool UsesMmdOutline(string sourceShaderName)
         {
-            if (ShaderNameContains(sourceShaderName, "Edge"))
-            {
-                return true;
-            }
+            return ShaderNameContains(sourceShaderName, "Edge");
+        }
 
-            materialName = materialName ?? string.Empty;
-            if (materialName.IndexOf("decal", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("eye_hi", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("eyehi", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("hairshadow", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("cheek", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("lens", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("megane", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("face01", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("hair01", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return false;
-            }
-
-            return materialName.IndexOf("body_", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("face00", StringComparison.OrdinalIgnoreCase) >= 0
-                || materialName.IndexOf("hair00", StringComparison.OrdinalIgnoreCase) >= 0;
+        private static bool UsesMmdTransparentFogOption(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.MMD4Mecanim;
         }
 
         private static bool ShaderNameContains(string shaderName, string token)
         {
             return !string.IsNullOrEmpty(shaderName)
                 && shaderName.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsMmd4MecanimShader(string shaderName)
+        {
+            return ShaderNameContains(shaderName, "MMD4Mecanim/");
         }
 
         private static Color GetMmdEmissionColor(Material material, Texture emissionMap)
@@ -676,6 +1069,54 @@ namespace VLiveKit.LiveToon.Editor
             SetColorIfPresent(material, "_EmissiveColor", hasEmission ? emissionColor : Color.black);
             SetColorIfPresent(material, "_EmissiveColorLDR", hasEmission ? ClampColor01(emissionColor) : Color.black);
             SetTextureIfPresent(material, "_EmissionMap", hasEmission && emissionMap != null ? emissionMap : null);
+        }
+
+        private static LiveToonSpecularMaterialState CaptureMmdSpecularState(Material material)
+        {
+            var sourceSpecular = GetColor(material, "_Specular", Color.black);
+            var maxSpecular = Mathf.Max(sourceSpecular.r, Mathf.Max(sourceSpecular.g, sourceSpecular.b));
+            var specularHighlights = GetFloat(material, "_SpecularHighlights", 1f);
+            var specularPower = Mathf.Clamp(GetFloat(material, "_Shininess", MmdDefaultSpecularPower), 1f, 256f);
+            if (specularHighlights <= 0f || maxSpecular <= MmdVisibleSpecularThreshold)
+            {
+                return new LiveToonSpecularMaterialState
+                {
+                    Color = Color.black,
+                    Intensity = 0f,
+                    Power = specularPower
+                };
+            }
+
+            return new LiveToonSpecularMaterialState
+            {
+                Color = ClampColor01(new Color(
+                    sourceSpecular.r / maxSpecular,
+                    sourceSpecular.g / maxSpecular,
+                    sourceSpecular.b / maxSpecular,
+                    1f)),
+                Intensity = Mathf.Clamp01(maxSpecular),
+                Power = specularPower
+            };
+        }
+
+        private static void ApplyMToonSpecularState(Material material)
+        {
+            SetColorIfPresent(material, "_SpecColor", Color.black);
+            SetColorIfPresent(material, "_MmdSpecularColor", Color.black);
+            SetFloatIfPresent(material, "_Intensity", 0f);
+            SetFloatIfPresent(material, "_MmdSpecularIntensity", 0f);
+            SetFloatIfPresent(material, "_MmdSpecularPower", MmdDefaultSpecularPower);
+        }
+
+        private static void ApplyMmdSpecularState(Material material, LiveToonSpecularMaterialState specularState)
+        {
+            SetColorIfPresent(material, "_SpecColor", specularState.Color);
+            SetColorIfPresent(material, "_MmdSpecularColor", specularState.Color);
+            SetFloatIfPresent(material, "_Intensity", specularState.Intensity);
+            SetFloatIfPresent(material, "_MmdSpecularIntensity", specularState.Intensity);
+            SetFloatIfPresent(material, "_Shininess", specularState.Power);
+            SetFloatIfPresent(material, "_Sharpness", Mathf.Clamp(specularState.Power * 0.45f, 8f, 80f));
+            SetFloatIfPresent(material, "_MmdSpecularPower", specularState.Power);
         }
 
         private static void ApplyEnvironmentLightingDefaults(Material material)
@@ -729,16 +1170,20 @@ namespace VLiveKit.LiveToon.Editor
                     material.DisableKeyword("_ALPHATEST_ON");
                     material.DisableKeyword("_ALPHABLEND_ON");
                     material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    SetFloatIfPresent(material, "_TransparentFogAlphaWeight", 0f);
+                    SetFloatIfPresent(material, "_TransparentFogIntensity", 0f);
                     SetRenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 0f);
                     SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     SetTransparentDepthPasses(material, false);
-                    material.renderQueue = 2225;
+                    material.renderQueue = LiveToonFogBaseQueue;
                     break;
                 case 1:
                     material.SetOverrideTag("RenderType", "TransparentCutout");
                     material.EnableKeyword("_ALPHATEST_ON");
                     material.DisableKeyword("_ALPHABLEND_ON");
                     material.DisableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    SetFloatIfPresent(material, "_TransparentFogAlphaWeight", 0f);
+                    SetFloatIfPresent(material, "_TransparentFogIntensity", 0f);
                     SetRenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 0f);
                     SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     SetTransparentDepthPasses(material, false);
@@ -749,6 +1194,9 @@ namespace VLiveKit.LiveToon.Editor
                     material.DisableKeyword("_ALPHATEST_ON");
                     material.EnableKeyword("_ALPHABLEND_ON");
                     material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    // MToon conversion: reset stale MMD fog state so TransparentWithZWrite is fogged by LiveToon/HDRP.
+                    SetFloatIfPresent(material, "_TransparentFogAlphaWeight", 0f);
+                    SetFloatIfPresent(material, "_TransparentFogIntensity", 1f);
                     SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 1f, alphaToMask: 0f);
                     SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     SetTransparentDepthPasses(material, true);
@@ -759,6 +1207,9 @@ namespace VLiveKit.LiveToon.Editor
                     material.DisableKeyword("_ALPHATEST_ON");
                     material.EnableKeyword("_ALPHABLEND_ON");
                     material.EnableKeyword("_ENABLE_FOG_ON_TRANSPARENT");
+                    // MToon conversion: reset stale MMD fog state so Transparent is fogged by LiveToon/HDRP.
+                    SetFloatIfPresent(material, "_TransparentFogAlphaWeight", 0f);
+                    SetFloatIfPresent(material, "_TransparentFogIntensity", 1f);
                     SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 0f, alphaToMask: 0f);
                     SetFloatIfPresent(material, "_ZTeForLiOpa", ZTestLessEqual);
                     SetTransparentDepthPasses(material, false);
@@ -779,6 +1230,8 @@ namespace VLiveKit.LiveToon.Editor
         {
             material.SetShaderPassEnabled(TransparentDepthPrepassName, enabled);
             material.SetShaderPassEnabled(TransparentDepthPostpassName, enabled);
+            SetFloatIfPresent(material, "_TransparentDepthPrepassEnable", enabled ? 1f : 0f);
+            SetFloatIfPresent(material, "_TransparentDepthPostpassEnable", enabled ? 1f : 0f);
         }
 
         private static void DisableOutline(Material material)
@@ -854,6 +1307,11 @@ namespace VLiveKit.LiveToon.Editor
             return material.HasProperty(propertyName) ? material.GetColor(propertyName) : fallback;
         }
 
+        private static Vector4 GetVector(Material material, string propertyName, Vector4 fallback)
+        {
+            return material.HasProperty(propertyName) ? material.GetVector(propertyName) : fallback;
+        }
+
         private static void SetFloatIfPresent(Material material, string propertyName, float value)
         {
             if (material.HasProperty(propertyName))
@@ -878,6 +1336,14 @@ namespace VLiveKit.LiveToon.Editor
             }
         }
 
+        private static void SetVectorIfPresent(Material material, string propertyName, Vector4 value)
+        {
+            if (material.HasProperty(propertyName))
+            {
+                material.SetVector(propertyName, value);
+            }
+        }
+
         private static bool HasVisibleRgb(Color color)
         {
             return color.r > 0.001f || color.g > 0.001f || color.b > 0.001f;
@@ -897,10 +1363,11 @@ namespace VLiveKit.LiveToon.Editor
                 Mathf.Clamp01(color.a));
         }
 
-        private static Material CreateConvertedMaterial(Material sourceMaterial)
+        private static Material CreateConvertedMaterial(Material sourceMaterial, LiveToonShaderConversionSource conversionSource)
         {
             var sourceAssetPath = NormalizeAssetPath(AssetDatabase.GetAssetPath(sourceMaterial));
-            var convertedPath = GetConvertedMaterialPath(sourceMaterial, sourceAssetPath);
+            var convertedPath = GetConvertedMaterialPath(sourceMaterial, sourceAssetPath, conversionSource);
+            var convertedSuffix = GetConvertedSuffix(conversionSource);
             if (string.IsNullOrEmpty(convertedPath))
             {
                 return null;
@@ -914,6 +1381,17 @@ namespace VLiveKit.LiveToon.Editor
             }
 
             EnsureFolder(convertedDirectory);
+            var existingConvertedMaterial = AssetDatabase.LoadAssetAtPath<Material>(convertedPath);
+            if (existingConvertedMaterial != null)
+            {
+                Undo.RecordObject(existingConvertedMaterial, "Update LiveToon Material Copy");
+                EditorUtility.CopySerialized(sourceMaterial, existingConvertedMaterial);
+                existingConvertedMaterial.name = $"{sourceMaterial.name}{convertedSuffix}";
+                EditorUtility.SetDirty(existingConvertedMaterial);
+                SetConvertedMaterialSourceIdentity(convertedPath, sourceMaterial, sourceAssetPath);
+                return existingConvertedMaterial;
+            }
+
             convertedPath = AssetDatabase.GenerateUniqueAssetPath(convertedPath);
             if (string.IsNullOrEmpty(convertedPath))
             {
@@ -923,7 +1401,7 @@ namespace VLiveKit.LiveToon.Editor
 
             var convertedMaterial = new Material(sourceMaterial)
             {
-                name = $"{sourceMaterial.name}{ConvertedSuffix}"
+                name = $"{sourceMaterial.name}{convertedSuffix}"
             };
 
             AssetDatabase.CreateAsset(convertedMaterial, convertedPath);
@@ -932,39 +1410,46 @@ namespace VLiveKit.LiveToon.Editor
             return convertedMaterial;
         }
 
-        private static string GetConvertedMaterialPath(Material sourceMaterial, string sourceAssetPath)
+        private static string GetConvertedMaterialPath(
+            Material sourceMaterial,
+            string sourceAssetPath,
+            LiveToonShaderConversionSource conversionSource)
         {
+            var convertedDirectoryName = GetConvertedDirectoryName(conversionSource);
+            var convertedSuffix = GetConvertedSuffix(conversionSource);
+            var generatedMaterialsDirectory = GetGeneratedMaterialsDirectory(conversionSource);
+
             if (!string.IsNullOrEmpty(sourceAssetPath) && IsConvertedMaterialPath(sourceAssetPath))
             {
                 var convertedSourceDirectory = GetAssetDirectoryName(sourceAssetPath);
                 var convertedSourceName = GetAssetFileNameWithoutExtension(sourceAssetPath);
                 var originalLikeName = RemoveConvertedSuffix(convertedSourceName) ?? convertedSourceName;
                 var convertedSourceExtension = GetMaterialAssetExtension(sourceAssetPath);
-                return $"{convertedSourceDirectory}/{SanitizeAssetFileName(originalLikeName)}{ConvertedSuffix}{convertedSourceExtension}";
+                return $"{convertedSourceDirectory}/{SanitizeAssetFileName(originalLikeName)}{convertedSuffix}{convertedSourceExtension}";
             }
 
             var sourceFileName = UseSourceMaterialNameForConvertedAsset(sourceMaterial, sourceAssetPath)
                 ? SanitizeAssetFileName(sourceMaterial.name)
                 : SanitizeAssetFileName(GetAssetFileNameWithoutExtension(sourceAssetPath));
             var extension = GetMaterialAssetExtension(sourceAssetPath);
-            var convertedFileName = $"{sourceFileName}{ConvertedSuffix}{extension}";
+            var convertedFileName = $"{sourceFileName}{convertedSuffix}{extension}";
 
             if (!string.IsNullOrEmpty(sourceAssetPath) && sourceAssetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
             {
                 var sourceDirectory = GetAssetDirectoryName(sourceAssetPath);
                 if (!string.IsNullOrEmpty(sourceDirectory))
                 {
-                    return $"{sourceDirectory}/{ConvertedDirectoryName}/{convertedFileName}";
+                    return $"{sourceDirectory}/{convertedDirectoryName}/{convertedFileName}";
                 }
             }
 
             var sourceGuid = string.IsNullOrEmpty(sourceAssetPath) ? string.Empty : AssetDatabase.AssetPathToGUID(sourceAssetPath);
             if (!string.IsNullOrEmpty(sourceGuid) && sourceGuid.Length >= 8)
             {
-                convertedFileName = $"{sourceFileName}{ConvertedSuffix}_{sourceGuid.Substring(0, 8)}{extension}";
+                convertedFileName = $"{sourceFileName}{convertedSuffix}_{sourceGuid.Substring(0, 8)}{extension}";
             }
 
-            return $"{GeneratedMaterialsDirectory}/{convertedFileName}";
+            return $"{generatedMaterialsDirectory}/{convertedFileName}";
         }
 
         private static bool UseSourceMaterialNameForConvertedAsset(Material sourceMaterial, string sourceAssetPath)
@@ -1027,13 +1512,13 @@ namespace VLiveKit.LiveToon.Editor
                 return null;
             }
 
-            if (convertedPath.StartsWith($"{GeneratedMaterialsDirectory}/", StringComparison.OrdinalIgnoreCase))
+            if (convertedPath.StartsWith($"{GeneratedMaterialsDirectory}/", StringComparison.OrdinalIgnoreCase)
+                || convertedPath.StartsWith($"{OfficialHdrpMmdGeneratedMaterialsDirectory}/", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
 
-            var marker = $"/{ConvertedDirectoryName}/";
-            var markerIndex = convertedPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            var markerIndex = GetConvertedDirectoryMarkerIndex(convertedPath);
             if (markerIndex < 0)
             {
                 return null;
@@ -1080,14 +1565,22 @@ namespace VLiveKit.LiveToon.Editor
                 return null;
             }
 
-            if (fileName.EndsWith(ConvertedSuffix, StringComparison.OrdinalIgnoreCase))
+            foreach (var suffix in GetConvertedSuffixes())
             {
-                return fileName.Substring(0, fileName.Length - ConvertedSuffix.Length);
+                if (fileName.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    return fileName.Substring(0, fileName.Length - suffix.Length);
+                }
+
+                var generatedMarker = $"{suffix}_";
+                var markerIndex = fileName.LastIndexOf(generatedMarker, StringComparison.OrdinalIgnoreCase);
+                if (markerIndex >= 0)
+                {
+                    return fileName.Substring(0, markerIndex);
+                }
             }
 
-            var generatedMarker = $"{ConvertedSuffix}_";
-            var markerIndex = fileName.LastIndexOf(generatedMarker, StringComparison.OrdinalIgnoreCase);
-            return markerIndex >= 0 ? fileName.Substring(0, markerIndex) : null;
+            return null;
         }
 
         private static bool IsConvertedMaterial(Material material)
@@ -1110,9 +1603,49 @@ namespace VLiveKit.LiveToon.Editor
 
             var normalizedPath = NormalizeAssetPath(assetPath);
             var fileName = GetAssetFileNameWithoutExtension(normalizedPath);
-            return normalizedPath.IndexOf($"/{ConvertedDirectoryName}/", StringComparison.OrdinalIgnoreCase) >= 0
-                && (fileName.EndsWith(ConvertedSuffix, StringComparison.OrdinalIgnoreCase)
-                    || fileName.IndexOf($"{ConvertedSuffix}_", StringComparison.OrdinalIgnoreCase) >= 0);
+            return GetConvertedDirectoryMarkerIndex(normalizedPath) >= 0
+                && !string.IsNullOrEmpty(RemoveConvertedSuffix(fileName));
+        }
+
+        private static string GetConvertedDirectoryName(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
+                ? OfficialHdrpMmdConvertedDirectoryName
+                : ConvertedDirectoryName;
+        }
+
+        private static string GetConvertedSuffix(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
+                ? OfficialHdrpMmdConvertedSuffix
+                : ConvertedSuffix;
+        }
+
+        private static string GetGeneratedMaterialsDirectory(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
+                ? OfficialHdrpMmdGeneratedMaterialsDirectory
+                : GeneratedMaterialsDirectory;
+        }
+
+        private static string[] GetConvertedSuffixes()
+        {
+            return new[] { ConvertedSuffix, OfficialHdrpMmdConvertedSuffix };
+        }
+
+        private static int GetConvertedDirectoryMarkerIndex(string normalizedPath)
+        {
+            foreach (var directoryName in new[] { ConvertedDirectoryName, OfficialHdrpMmdConvertedDirectoryName })
+            {
+                var marker = $"/{directoryName}/";
+                var markerIndex = normalizedPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                if (markerIndex >= 0)
+                {
+                    return markerIndex;
+                }
+            }
+
+            return -1;
         }
 
         private static void SetConvertedMaterialSourceIdentity(string convertedPath, Material sourceMaterial, string sourceAssetPath)
@@ -1132,6 +1665,7 @@ namespace VLiveKit.LiveToon.Editor
             var sourceGlobalIdLine = $"{SourceMaterialGlobalObjectIdPrefix}{GlobalObjectId.GetGlobalObjectIdSlow(sourceMaterial)}";
             var sourceNameLine = $"{SourceMaterialNamePrefix}{sourceMaterial.name}";
             var sourceShaderNameLine = $"{SourceMaterialShaderNamePrefix}{GetMmdSourceShaderName(sourceMaterial)}";
+            var sourceRenderQueueLine = $"{SourceMaterialRenderQueuePrefix}{GetMmdRenderQueue(sourceMaterial)}";
             var userData = importer.userData ?? string.Empty;
             var lines = userData.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
             var updatedLines = new List<string>();
@@ -1141,7 +1675,8 @@ namespace VLiveKit.LiveToon.Editor
                 if (line.StartsWith(SourceMaterialPathPrefix, StringComparison.Ordinal)
                     || line.StartsWith(SourceMaterialGlobalObjectIdPrefix, StringComparison.Ordinal)
                     || line.StartsWith(SourceMaterialNamePrefix, StringComparison.Ordinal)
-                    || line.StartsWith(SourceMaterialShaderNamePrefix, StringComparison.Ordinal))
+                    || line.StartsWith(SourceMaterialShaderNamePrefix, StringComparison.Ordinal)
+                    || line.StartsWith(SourceMaterialRenderQueuePrefix, StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1153,6 +1688,7 @@ namespace VLiveKit.LiveToon.Editor
             updatedLines.Add(sourceGlobalIdLine);
             updatedLines.Add(sourceNameLine);
             updatedLines.Add(sourceShaderNameLine);
+            updatedLines.Add(sourceRenderQueueLine);
             var updatedUserData = string.Join("\n", updatedLines);
             if (string.Equals(userData, updatedUserData, StringComparison.Ordinal))
             {
@@ -1197,6 +1733,12 @@ namespace VLiveKit.LiveToon.Editor
         private static string GetConvertedMaterialSourceShaderName(string convertedPath)
         {
             return GetConvertedMaterialSourceUserDataValue(convertedPath, SourceMaterialShaderNamePrefix);
+        }
+
+        private static float GetConvertedMaterialSourceRenderQueue(string convertedPath)
+        {
+            var value = GetConvertedMaterialSourceUserDataValue(convertedPath, SourceMaterialRenderQueuePrefix);
+            return float.TryParse(value, out var renderQueue) ? renderQueue : -1f;
         }
 
         private static string GetConvertedMaterialSourceUserDataValue(string convertedPath, string prefix)

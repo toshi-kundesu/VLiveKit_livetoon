@@ -3,7 +3,19 @@ using UnityEngine;
 public enum LiveToonShaderConversionSource
 {
     MToon = 0,
-    MMD4Mecanim = 1
+    MMD4Mecanim = 1,
+    OfficialHDRPMMD = 2
+}
+
+public enum MmdTransparentFogMode
+{
+    PreserveMmdQueue = 0,
+    HdrpMmdStackRangeWithSurfaceFog = 1,
+    PreserveMmdQueueNoSurfaceFog = 2,
+    PreserveMmdQueueWithSurfaceFog = 3,
+    HdrpTransparentRangeNoSurfaceFog = 4,
+    HdrpTransparentRangeWithSurfaceFog = 5,
+    HdrpMmdStackRangeNoSurfaceFog = 6
 }
 
 [DisallowMultipleComponent]
@@ -11,6 +23,7 @@ public enum LiveToonShaderConversionSource
 public sealed class LiveToonShaderConverter : MonoBehaviour
 {
     public const string DefaultShaderName = "toshi/VLiveKit/livetoon";
+    public const string OfficialHdrpMmdShaderName = "MMD4Mecanim/HDRP/MMDLit";
 
     [SerializeField]
     private GameObject targetObject;
@@ -22,6 +35,9 @@ public sealed class LiveToonShaderConverter : MonoBehaviour
     private LiveToonShaderConversionSource conversionSource;
 
     [SerializeField]
+    private MmdTransparentFogMode mmdTransparentFogMode = MmdTransparentFogMode.HdrpMmdStackRangeWithSurfaceFog;
+
+    [SerializeField]
     private bool createMaterialBackups;
 
     [SerializeField]
@@ -29,9 +45,15 @@ public sealed class LiveToonShaderConverter : MonoBehaviour
 
     public GameObject TargetObject => targetObject != null ? targetObject : gameObject;
 
-    public Shader ShaderToUse => shaderToUse != null ? shaderToUse : Shader.Find(DefaultShaderName);
+    public Shader ShaderToUse => conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
+        ? Shader.Find(OfficialHdrpMmdShaderName)
+        : shaderToUse != null
+            ? shaderToUse
+            : Shader.Find(DefaultShaderName);
 
     public LiveToonShaderConversionSource ConversionSource => conversionSource;
+
+    public MmdTransparentFogMode MmdTransparentFogMode => mmdTransparentFogMode;
 
     public bool CreateMaterialBackups => createMaterialBackups;
 
@@ -42,5 +64,6 @@ public sealed class LiveToonShaderConverter : MonoBehaviour
         targetObject = gameObject;
         shaderToUse = Shader.Find(DefaultShaderName);
         conversionSource = LiveToonShaderConversionSource.MToon;
+        mmdTransparentFogMode = MmdTransparentFogMode.HdrpMmdStackRangeWithSurfaceFog;
     }
 }

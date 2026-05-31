@@ -10,6 +10,7 @@ namespace VLiveKit.LiveToon.Editor
         private SerializedProperty targetObjectProperty;
         private SerializedProperty shaderToUseProperty;
         private SerializedProperty conversionSourceProperty;
+        private SerializedProperty mmdTransparentFogModeProperty;
         private SerializedProperty createMaterialBackupsProperty;
         private SerializedProperty disableOutlineOnConvertProperty;
 
@@ -18,6 +19,7 @@ namespace VLiveKit.LiveToon.Editor
             targetObjectProperty = serializedObject.FindProperty("targetObject");
             shaderToUseProperty = serializedObject.FindProperty("shaderToUse");
             conversionSourceProperty = serializedObject.FindProperty("conversionSource");
+            mmdTransparentFogModeProperty = serializedObject.FindProperty("mmdTransparentFogMode");
             createMaterialBackupsProperty = serializedObject.FindProperty("createMaterialBackups");
             disableOutlineOnConvertProperty = serializedObject.FindProperty("disableOutlineOnConvert");
         }
@@ -28,7 +30,13 @@ namespace VLiveKit.LiveToon.Editor
 
             EditorGUILayout.PropertyField(targetObjectProperty);
             EditorGUILayout.PropertyField(shaderToUseProperty);
-            EditorGUILayout.PropertyField(conversionSourceProperty);
+            EditorGUILayout.PropertyField(conversionSourceProperty, new GUIContent("Conversion Mode"));
+            var conversionSource = (LiveToonShaderConversionSource)conversionSourceProperty.enumValueIndex;
+            using (new EditorGUI.DisabledScope(!UsesMmdTransparentFogOption(conversionSource)))
+            {
+                EditorGUILayout.PropertyField(mmdTransparentFogModeProperty, new GUIContent("MMD Transparent Path"));
+            }
+
             EditorGUILayout.PropertyField(createMaterialBackupsProperty, new GUIContent("Also Create Legacy Backups"));
             EditorGUILayout.PropertyField(disableOutlineOnConvertProperty, new GUIContent("Disable Outline After Convert"));
 
@@ -71,6 +79,11 @@ namespace VLiveKit.LiveToon.Editor
             }
         }
 
+        private static bool UsesMmdTransparentFogOption(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.MMD4Mecanim;
+        }
+
         private void ConvertSelectedComponents()
         {
             foreach (LiveToonShaderConverter converter in targets)
@@ -80,7 +93,8 @@ namespace VLiveKit.LiveToon.Editor
                     converter.ShaderToUse,
                     converter.CreateMaterialBackups,
                     converter.DisableOutlineOnConvert,
-                    converter.ConversionSource);
+                    converter.ConversionSource,
+                    converter.MmdTransparentFogMode);
                 Debug.Log(result.ToConversionLog(), converter);
             }
         }
