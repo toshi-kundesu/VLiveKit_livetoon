@@ -4,7 +4,8 @@ public enum LiveToonShaderConversionSource
 {
     MToon = 0,
     MMD4Mecanim = 1,
-    OfficialHDRPMMD = 2
+    OfficialHDRPMMD = 2,
+    LiveToonToMToon = 3
 }
 
 public enum MmdTransparentFogMode
@@ -23,6 +24,9 @@ public enum MmdTransparentFogMode
 public sealed class LiveToonShaderConverter : MonoBehaviour
 {
     public const string DefaultShaderName = "toshi/VLiveKit/livetoon";
+    public const string MToonShaderName = "VRM/MToon";
+    public const string MToon10ShaderName = "VRM10/Universal Render Pipeline/MToon10";
+    public const string MToon10BuiltinShaderName = "VRM10/MToon10";
     public const string OfficialHdrpMmdShaderName = "MMD4Mecanim/HDRP/MMDLit";
 
     [SerializeField]
@@ -45,13 +49,17 @@ public sealed class LiveToonShaderConverter : MonoBehaviour
 
     public GameObject TargetObject => targetObject != null ? targetObject : gameObject;
 
-    public Shader ShaderToUse => conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
+    public Shader ShaderToUse => conversionSource == LiveToonShaderConversionSource.LiveToonToMToon
+        ? Shader.Find(MToonShaderName) ?? Shader.Find(MToon10ShaderName) ?? Shader.Find(MToon10BuiltinShaderName)
+        : conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
         ? Shader.Find(OfficialHdrpMmdShaderName)
         : shaderToUse != null
             ? shaderToUse
             : Shader.Find(DefaultShaderName);
 
     public LiveToonShaderConversionSource ConversionSource => conversionSource;
+
+    public bool RequiresTargetShader => conversionSource != LiveToonShaderConversionSource.LiveToonToMToon;
 
     public MmdTransparentFogMode MmdTransparentFogMode => mmdTransparentFogMode;
 

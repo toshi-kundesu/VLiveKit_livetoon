@@ -12,6 +12,10 @@ Shader "toshi/VLiveKit/livetoon"
         _ShadeColor ("Shade Color", Color) = (0.97, 0.81, 0.86, 1)
         [NoScaleOffset] _MainTex ("Lit Texture + Alpha", 2D) = "white" {}
         [NoScaleOffset] _ShadeTexture ("Shade Texture", 2D) = "white" {}
+        [NoScaleOffset] _MmdToonTex ("MMD Toon Texture", 2D) = "white" {}
+        [HideInInspector] _MmdToonTexIntensity ("MMD Toon Texture Intensity", Float) = 0
+        [HideInInspector] _MmdShadowLum ("MMD Shadow Lum", Float) = 1.5
+        [HideInInspector] _MmdToonTone ("MMD Toon Tone", Vector) = (1.0, 0.5, 0.5, 0.0)
         _BumpScale ("Normal Scale", Float) = 1.0
         [Normal] _BumpMap ("Normal Texture", 2D) = "bump" {}
         _ReceiveShadowRate ("Receive Shadow", Range(0, 1)) = 1
@@ -44,6 +48,9 @@ Shader "toshi/VLiveKit/livetoon"
         _RimLift ("Rim Lift", Range(0, 1)) = 0
         _CustomRimIntensity ("Custom Rim Intensity", Range(0, 2)) = 1
         [NoScaleOffset] _SphereAdd ("Sphere Texture(Add)", 2D) = "black" {}
+        [NoScaleOffset] _MmdSphereCube ("MMD Sphere Cube", Cube) = "" {}
+        [HideInInspector] _MmdSphereMode ("MMD Sphere Mode", Float) = 0
+        [HideInInspector] _MmdSphereIntensity ("MMD Sphere Intensity", Float) = 1
         [HDR] _EmissionColor ("Color", Color) = (0,0,0)
         [NoScaleOffset] _EmissionMap ("Emission", 2D) = "white" {}
         [NoScaleOffset] _OutlineWidthTexture ("Outline Width Tex", 2D) = "white" {}
@@ -63,6 +70,10 @@ Shader "toshi/VLiveKit/livetoon"
         [HideInInspector] _OutlineColorMode ("_OutlineColorMode", Float) = 0.0
         [HideInInspector] _CullMode ("_CullMode", Float) = 2.0
         [HideInInspector] _OutlineCullMode ("_OutlineCullMode", Float) = 1.0
+        [HideInInspector] _OutlineSrcBlend ("_OutlineSrcBlend", Float) = 1.0
+        [HideInInspector] _OutlineDstBlend ("_OutlineDstBlend", Float) = 0.0
+        [HideInInspector] _OutlineZWrite ("_OutlineZWrite", Float) = 1.0
+        [HideInInspector] _OutlineZTest ("_OutlineZTest", Float) = 4.0
         [HideInInspector] _SrcBlend ("_SrcBlend", Float) = 1.0
         [HideInInspector] _DstBlend ("_DstBlend", Float) = 0.0
         [HideInInspector] _ZWrite ("_ZWrite", Float) = 1.0
@@ -202,6 +213,9 @@ uniform float4 _Color;
 uniform float4 _ShadeColor;
 uniform float4 _MainTex_ST;
 uniform float4 _ShadeTexture_ST;
+uniform float _MmdToonTexIntensity;
+uniform float _MmdShadowLum;
+uniform float4 _MmdToonTone;
 uniform float _BumpScale;
 uniform float4 _BumpMap_ST;
 uniform float _ReceiveShadowRate;
@@ -235,6 +249,8 @@ uniform float _RimFresnelPower;
 uniform float _RimLift;
 uniform float _CustomRimIntensity;
 uniform float4 _SphereAdd_ST;
+uniform float _MmdSphereMode;
+uniform float _MmdSphereIntensity;
 
 uniform float4 _EmissionColor;
 uniform float4 _EmissionMap_ST;
@@ -362,6 +378,8 @@ SAMPLER(sampler_MainTex);
 TEXTURE2D(_ShadeTexture);
 SAMPLER(sampler_ShadeTexture);
 
+TEXTURE2D(_MmdToonTex);
+
 TEXTURE2D(_UvAnimMaskTexture);
 SAMPLER(sampler_UvAnimMaskTexture);
 
@@ -382,6 +400,8 @@ SAMPLER(sampler_RimTexture);
 
 TEXTURE2D(_SphereAdd);
 SAMPLER(sampler_SphereAdd);
+
+TEXTURECUBE(_MmdSphereCube);
 
 TEXTURE2D(_EmissionMap);
 SAMPLER(sampler_EmissionMap);
@@ -1257,9 +1277,9 @@ Name"Outline"
 Tags{"LightMode"="SRPDefaultUnlit"}
 
 			Cull [_OutlineCullMode]
-            Blend [_SrcBlend] [_DstBlend]
-            ZWrite [_ZWrite]
-            ZTest LEqual
+            Blend [_OutlineSrcBlend] [_OutlineDstBlend]
+            ZWrite [_OutlineZWrite]
+            ZTest [_OutlineZTest]
             // MMD4Mecanim conversion: configurable outline depth bias; defaults keep the old LiveToon behavior.
             Offset [_MmdOutlineOffsetFactor], [_MmdOutlineOffsetUnits]
             // MMD4Mecanim conversion: configurable color mask; HDRP conversion keeps RGBA by default.

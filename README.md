@@ -68,6 +68,7 @@ The converter has a `Conversion Source` selector. `MToon` keeps the non-destruct
 - keeps the original source material assets unchanged
 - stores copies in a `LiveToonMaterials` folder next to source materials under `Assets/`
 - stores copies under `Assets/VLiveKitGenerated/LiveToonMaterials` when the source material is in a package or is not an asset
+- reuses and updates an existing converted copy at the same destination path instead of creating `_LiveToon 1`, `_LiveToon 2`, and other duplicate generations during repeated conversion tests
 - records the original material asset path on each generated copy so `Restore Original Material Assignments` can put renderer slots back, even when several conversion generations exist
 - swaps the copied material shader to `toshi/VLiveKit/livetoon`
 - preserves existing MToon-compatible material properties such as `_CullMode` and `_BlendMode`
@@ -92,7 +93,9 @@ The converter has a `Conversion Source` selector. `MToon` keeps the non-destruct
 - copies `_Color`, `_MainTex`, and a `_ShadeColor` approximation from the MMD material's `_Ambient`
 - maps MMD edge settings from `_EdgeColor` and `_EdgeSize` into LiveToon outline properties
 - forces emission off unless MMD4Mecanim has a real `_Emissive` color or `_EmissionMap`, avoiding the all-white look from default white `_EmissionColor`
-- keeps MMD shader-name hints such as `Transparent`, `Edge`, and `BothFaces`, plus `_Mode`, `_RenderQueue`, material names such as `hairshadow` / `eye_hi`, and `_Color.a`; regular MMD transparent mesh parts convert to Cutout for texture alpha, while overlay parts such as `hairshadow`, `eye_hi`, `cheek`, `decal`, and `lens` stay Transparent
+- keeps MMD shader-name hints such as `Transparent`, `Edge`, and `BothFaces`, plus `_Mode`, `_RenderQueue`, material names such as `hairshadow` / `eye_hi`, and `_Color.a`; MMD transparent shader variants become Opaque when the main texture has no transparency, Cutout when it does, and Transparent when the material name marks a soft translucent layer such as `hairshadow`, `eye_hi`, `cheek`, `decal`, `lens`, `Sleeve`, `Shadow`, `HL`, `Tear`, `Brow`, `Eyelash`, `_AL`, or `+`; no-alpha soft layers lower `_Color.a` so LiveToon's RGB-based transparent mask can reproduce MMD-style sleeve fades
+- uses backface culling for opaque hand materials even when the source shader says `BothFaces`, avoiding visible sleeve interiors and double-sided artifacts on closed MMD clothing meshes
+- hides MMD materials whose diffuse alpha is effectively zero by raising the LiveToon cutout threshold, so disabled overlay layers do not render as solid white parts
 - tracks FBX-embedded source materials with Unity `GlobalObjectId`, material name, and source shader name, so repeated conversion does not collapse every material back to the first material inside the FBX
 
 Legacy backups are stored in a `LiveToonMaterialBackups` folder next to the source material asset. The converter keeps the first backup instead of overwriting it, so you can compare original VRM 0.x material values while debugging culling and double-sided rendering.

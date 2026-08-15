@@ -29,16 +29,31 @@ namespace VLiveKit.LiveToon.Editor
             serializedObject.Update();
 
             EditorGUILayout.PropertyField(targetObjectProperty);
-            EditorGUILayout.PropertyField(shaderToUseProperty);
             EditorGUILayout.PropertyField(conversionSourceProperty, new GUIContent("Conversion Mode"));
             var conversionSource = (LiveToonShaderConversionSource)conversionSourceProperty.enumValueIndex;
+            var requiresTargetShader = RequiresTargetShader(conversionSource);
+            if (requiresTargetShader)
+            {
+                EditorGUILayout.PropertyField(shaderToUseProperty);
+            }
+            else
+            {
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.ObjectField("MToon Shader", ResolveMToonShader(), typeof(Shader), false);
+                }
+            }
+
             using (new EditorGUI.DisabledScope(!UsesMmdTransparentFogOption(conversionSource)))
             {
                 EditorGUILayout.PropertyField(mmdTransparentFogModeProperty, new GUIContent("MMD Transparent Path"));
             }
 
-            EditorGUILayout.PropertyField(createMaterialBackupsProperty, new GUIContent("Also Create Legacy Backups"));
-            EditorGUILayout.PropertyField(disableOutlineOnConvertProperty, new GUIContent("Disable Outline After Convert"));
+            using (new EditorGUI.DisabledScope(!requiresTargetShader))
+            {
+                EditorGUILayout.PropertyField(createMaterialBackupsProperty, new GUIContent("Also Create Legacy Backups"));
+                EditorGUILayout.PropertyField(disableOutlineOnConvertProperty, new GUIContent("Disable Outline After Convert"));
+            }
 
             serializedObject.ApplyModifiedProperties();
 
@@ -52,14 +67,14 @@ namespace VLiveKit.LiveToon.Editor
                 EditorGUILayout.HelpBox("Target Object is empty.", MessageType.None);
             }
 
-            if (shaderToUse == null)
+            if (requiresTargetShader && shaderToUse == null)
             {
                 EditorGUILayout.HelpBox($"Shader not found: {LiveToonShaderConverter.DefaultShaderName}", MessageType.None);
             }
 
-            using (new EditorGUI.DisabledScope(targetObject == null || shaderToUse == null))
+            using (new EditorGUI.DisabledScope(targetObject == null || (requiresTargetShader && shaderToUse == null)))
             {
-                if (GUILayout.Button("Convert And Assign Material Copies"))
+                if (GUILayout.Button(GetConvertButtonLabel(conversionSource)))
                 {
                     ConvertSelectedComponents();
                 }
@@ -84,6 +99,25 @@ namespace VLiveKit.LiveToon.Editor
             return conversionSource == LiveToonShaderConversionSource.MMD4Mecanim;
         }
 
+        private static bool RequiresTargetShader(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource != LiveToonShaderConversionSource.LiveToonToMToon;
+        }
+
+        private static string GetConvertButtonLabel(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.LiveToonToMToon
+                ? "Create And Assign MToon Copies"
+                : "Convert And Assign Material Copies";
+        }
+
+        private static Shader ResolveMToonShader()
+        {
+            return Shader.Find(LiveToonShaderConverter.MToonShaderName)
+                ?? Shader.Find(LiveToonShaderConverter.MToon10ShaderName)
+                ?? Shader.Find(LiveToonShaderConverter.MToon10BuiltinShaderName);
+        }
+
         private void ConvertSelectedComponents()
         {
             foreach (LiveToonShaderConverter converter in targets)
@@ -95,7 +129,9 @@ namespace VLiveKit.LiveToon.Editor
                     converter.DisableOutlineOnConvert,
                     converter.ConversionSource,
                     converter.MmdTransparentFogMode);
-                Debug.Log(result.ToConversionLog(), converter);
+                Debug.Log(converter.ConversionSource == LiveToonShaderConversionSource.LiveToonToMToon
+                    ? result.ToLiveToonToMToonLog()
+                    : result.ToConversionLog(), converter);
             }
         }
 

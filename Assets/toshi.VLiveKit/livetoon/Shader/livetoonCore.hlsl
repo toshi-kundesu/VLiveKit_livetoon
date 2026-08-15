@@ -463,7 +463,15 @@ float3 RT_RELGI_SUB1(
     return RTD_SL_OFF_OTHERS;
 }
 
-bool TryBuildPunctualFallbackDirectionalLight(v2f i, out DirectionalLightData fallbackDirectionalLightData)
+bool LiveToonEvaluateAreaLightData(
+    v2f i,
+    PositionInputs posInput,
+    LightData areaLightData,
+    out float3 areaLightDir,
+    out float areaLightAttenuation,
+    out float3 weightedColor);
+
+bool TryBuildPunctualFallbackDirectionalLight(v2f i, PositionInputs posInput, out DirectionalLightData fallbackDirectionalLightData)
 {
     fallbackDirectionalLightData = (DirectionalLightData)0;
 
@@ -501,6 +509,40 @@ bool TryBuildPunctualFallbackDirectionalLight(v2f i, out DirectionalLightData fa
         accumulatedWeight += weight;
     }
 
+#if defined(SHADEROPTIONS_AREA_LIGHTS) && SHADEROPTIONS_AREA_LIGHTS
+    uint areaLightStart;
+    uint areaLightCount;
+#ifndef LIGHTLOOP_DISABLE_TILE_AND_CLUSTER
+    GetCountAndStart(posInput, LIGHTCATEGORY_AREA, areaLightStart, areaLightCount);
+#else
+    areaLightCount = _AreaLightCount;
+    areaLightStart = _PunctualLightCount;
+#endif
+
+    uint areaLightListOffset = 0;
+    while (areaLightListOffset < areaLightCount)
+    {
+        uint areaLightIndex = FetchIndex(areaLightStart, areaLightListOffset);
+        areaLightListOffset++;
+        if (areaLightIndex == -1)
+        {
+            break;
+        }
+
+        LightData areaLightData = FetchLight(areaLightIndex);
+        float3 areaLightDir;
+        float areaLightAttenuation;
+        float3 weightedAreaColor;
+        if (LiveToonEvaluateAreaLightData(i, posInput, areaLightData, areaLightDir, areaLightAttenuation, weightedAreaColor))
+        {
+            float weight = max(weightedAreaColor.r, max(weightedAreaColor.g, weightedAreaColor.b));
+            accumulatedColor += weightedAreaColor;
+            accumulatedDirection += areaLightDir * weight;
+            accumulatedWeight += weight;
+        }
+    }
+#endif
+
     if (accumulatedWeight <= 1.0e-4)
     {
         return false;
@@ -533,6 +575,105 @@ float3 LiveToonAttenuateLightColor(float3 color)
 {
     float monochrome = max(1.0e-5, max(color.r, max(color.g, color.b)));
     return lerp(color, monochrome.xxx, saturate(_LightColorAttenuation));
+}
+
+PositionInputs LiveToonBuildPositionInputs(v2f i)
+{
+    uint2 tileIndex = uint2(i.pos.xy) / GetTileSize();
+    return GetPositionInput(i.pos.xy, _ScreenSize.zw, i.pos.z, i.pos.w, i.posWorld.xyz, tileIndex);
+}
+
+bool LiveToonEvaluateAreaLightData(
+    v2f i,
+    PositionInputs posInput,
+    LightData areaLightData,
+    out float3 areaLightDir,
+    out float areaLightAttenuation,
+    out float3 weightedColor)
+{
+    areaLightDir = float3(0.0, 1.0, 0.0);
+    areaLightAttenuation = 0.0;
+    weightedColor = float3(0.0, 0.0, 0.0);
+
+#if defined(SHADEROPTIONS_AREA_LIGHTS) && SHADEROPTIONS_AREA_LIGHTS
+    if (areaLightData.lightDimmer <= 0.0 || areaLightData.diffuseDimmer <= 0.0)
+    {
+        return false;
+    }
+
+    float3 lightToSample = areaLightData.positionRWS - i.posWorld.xyz;
+    float distanceSquared = max(dot(lightToSample, lightToSample), 1.0e-4);
+    float actualDistance = sqrt(distanceSquared);
+    areaLightDir = lightToSample / actualDistance;
+
+    float halfLength = max(areaLightData.size.x * 0.5, 0.0);
+    float halfHeight = max(areaLightData.size.y * 0.5, 0.0);
+    float attenuation = PillowWindowing(
+        lightToSample,
+        areaLightData.right,
+        areaLightData.up,
+        halfLength,
+        halfHeight,
+        areaLightData.rangeAttenuationScale,
+        areaLightData.rangeAttenuationBias);
+
+    if (areaLightData.lightType == GPULIGHTTYPE_RECTANGLE)
+    {
+        attenuation *= (dot(lightToSample, areaLightData.forward) >= 0.0) ? 0.0 : 1.0;
+    }
+
+    if (areaLightData.lightType == GPULIGHTTYPE_RECTANGLE && areaLightData.shadowDimmer > 0.0 && areaLightData.shadowIndex >= 0)
+    {
+        LightLoopContext context;
+        context.shadowContext = InitShadowContext();
+        context.shadowValue = 1;
+        context.sampleReflection = 0;
+        context.contactShadowFade = 0.0;
+        context.contactShadow = 0;
+#ifdef APPLY_FOG_ON_SKY_REFLECTIONS
+        context.positionWS = posInput.positionWS;
+#endif
+
+        float areaShadow = GetRectAreaShadowAttenuation(
+            context.shadowContext,
+            posInput.positionSS,
+            posInput.positionWS,
+            normalize(i.normalWS),
+            areaLightData.shadowIndex,
+            areaLightDir,
+            actualDistance);
+        attenuation *= lerp(1.0, smoothstep(0.0, 1.0, areaShadow), saturate(areaLightData.shadowDimmer));
+    }
+
+    attenuation *= max(areaLightData.lightDimmer, 0.0) * max(areaLightData.diffuseDimmer, 0.0);
+    areaLightAttenuation = attenuation;
+    weightedColor = areaLightData.color * attenuation;
+    return max(weightedColor.r, max(weightedColor.g, weightedColor.b)) > 1.0e-5;
+#else
+    return false;
+#endif
+}
+
+float3 LiveToonEvaluateAreaAdditionalDiffuse(v2f i, PositionInputs posInput, LightData areaLightData)
+{
+    float3 areaLightDir;
+    float areaLightAttenuation;
+    float3 weightedColor;
+    if (!LiveToonEvaluateAreaLightData(i, posInput, areaLightData, areaLightDir, areaLightAttenuation, weightedColor))
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    float3 worldView = normalize(i.viewDirWS);
+    float3 worldNormal = normalize(i.normalWS);
+    worldNormal *= step(0, dot(worldView, worldNormal)) * 2 - 1;
+    worldNormal *= lerp(+1.0, -1.0, i.isOutline);
+    worldNormal = normalize(worldNormal);
+
+    float dotNL = dot(areaLightDir, worldNormal);
+    float lightIntensity = (dotNL * 0.5 + 0.5) * areaLightAttenuation;
+    float3 lightColor = LiveToonAttenuateLightColor(areaLightData.color * GetCurrentExposureMultiplier() / 10.0);
+    return lightIntensity.xxx * lightColor;
 }
 
 float3 LiveToonSampleEnvironmentReflection(PositionInputs posInput, float3 viewDirectionWS, float3 normalWS, float perceptualSmoothness)
@@ -686,6 +827,63 @@ float3 LiveToonApplyWetSkinOverlays(float3 color, float2 mainUv, float3 viewDire
     }
 
     return color;
+}
+
+float3 LiveToonApplyMmdToonTexture(float3 color, float nDotL, float shadowAttenuation)
+{
+    float intensity = saturate(_MmdToonTexIntensity);
+    if (intensity <= 0.0)
+    {
+        return color;
+    }
+
+    // MMD4Mecanim samples ToonTex as a light ramp from light angle and shadow attenuation.
+    float lightRamp = nDotL * _MmdToonTone.y + _MmdToonTone.z;
+    float shadowRamp = (shadowAttenuation - 0.5) * _MmdToonTone.x + _MmdToonTone.z;
+    float rampPosition = saturate(min(lightRamp, shadowRamp));
+    float3 ramp = SAMPLE_TEXTURE2D(_MmdToonTex, sampler_MainTex, float2(rampPosition, rampPosition)).rgb;
+    ramp = saturate(1.0 - (1.0 - ramp) * max(_MmdShadowLum, 0.0));
+    return color * lerp(float3(1.0, 1.0, 1.0), ramp, intensity);
+}
+
+float3 LiveToonApplyMmdSphereCube(float3 color, float3 normalWS, float3 viewDirectionWS, float outlineMask)
+{
+    float sphereMode = _MmdSphereMode;
+    float sphereIntensity = max(_MmdSphereIntensity, 0.0);
+    if (sphereMode < 0.5 || sphereIntensity <= 0.0 || outlineMask > 0.5)
+    {
+        return color;
+    }
+
+    // MMD4Mecanim evaluates the sphere map in view space using reflect(eye, normal).
+    float3 normalVS = normalize(TransformWorldToViewDir(normalWS));
+    float3 eyeVS = normalize(TransformWorldToViewDir(-viewDirectionWS));
+    float3 sphereDirection = reflect(eyeVS, normalVS);
+    float3 sphereColor = SAMPLE_TEXTURECUBE(_MmdSphereCube, sampler_SphereAdd, sphereDirection).rgb * sphereIntensity;
+
+    return sphereMode < 1.5
+        ? color + sphereColor
+        : color * sphereColor;
+}
+
+float3 LiveToonEvaluateMmdSpecular(float3 normalWS, float3 lightDirectionWS, float3 viewDirectionWS, float3 lightColor, float outlineMask)
+{
+    float intensity = saturate(_MmdSpecularIntensity);
+    if (intensity <= 0.0)
+    {
+        return float3(0.0, 0.0, 0.0);
+    }
+
+    // MMD4Mecanim-style specular: _Specular * lightColor * pow(N dot H, _Shininess).
+    float3 H = normalize(normalize(lightDirectionWS) + normalize(viewDirectionWS));
+    float refl = pow(saturate(dot(normalize(normalWS), H)), max(_MmdSpecularPower, 1.0));
+    return _MmdSpecularColor.rgb
+        * lightColor
+        * refl
+        * intensity
+        * GetCurrentExposureMultiplier()
+        * (1.0 - saturate(outlineMask))
+        * 0.1;
 }
 
 float4 CalculateDirectionalLighting(v2f i, DirectionalLightData directionalLightData, bool useSceneShadow, out float3 rimColor, out float3 specCol)
@@ -1031,6 +1229,7 @@ lightIntensity = lightIntensity * 2.0 - 1.0; // from [0, 1] to [-1, +1]
     half4 shade = _ShadeColor * SAMPLE_TEXTURE2D(_ShadeTexture, sampler_ShadeTexture, float4(mainUv, 0, 0));
     half4 lit = _Color * mainTex;
 half3 col = lerp(shade.rgb, lit.rgb, lightIntensity);
+col = LiveToonApplyMmdToonTexture(col, dotNL, lightAttenuation);
 
 // Direct Light
     half3 lighting = lightColor;
@@ -1170,20 +1369,14 @@ specCol *= specNdL * specShadowMask;
 
 }
 
-float mmdSpecularIntensity = saturate(_MmdSpecularIntensity);
-if (mmdSpecularIntensity > 0.0)
+if (_isHair <= 0.5)
 {
-    float3 H_mmdSpecular = normalize(normalize(lightDir) + normalize(worldView));
-    float mmdSpecularNdotH = saturate(dot(worldNormal_default, H_mmdSpecular));
-    float mmdSpecular = pow(mmdSpecularNdotH, max(_MmdSpecularPower, 1.0)) * mmdSpecularIntensity;
-    float mmdSpecularShadowMask = smoothstep(0.05, 0.95, hairSpecDirectionalShadow);
-    specCol += _MmdSpecularColor.rgb
-        * directionalLightData.color
-        * mmdSpecular
-        * mmdSpecularShadowMask
-        * GetCurrentExposureMultiplier()
-        * (1.0 - saturate(i.isOutline))
-        * 0.1;
+    specCol += LiveToonEvaluateMmdSpecular(
+        worldNormal_default,
+        lightDir,
+        worldView,
+        directionalLightData.color,
+        i.isOutline);
 }
 
 
@@ -1218,6 +1411,7 @@ if (mmdSpecularIntensity > 0.0)
     half2 matcapUv = half2(dot(worldViewRight, worldNormal), dot(worldViewUp, worldNormal)) * 0.5 + 0.5;
     half3 matcapLighting = SAMPLE_TEXTURE2D(_SphereAdd, sampler_SphereAdd, matcapUv);
     col += lerp(matcapLighting, half3(0, 0, 0), i.isOutline);
+    col = LiveToonApplyMmdSphereCube(col, worldNormal, worldView, i.isOutline);
 #endif
 
                  // Emission
@@ -1459,6 +1653,7 @@ lightIntensity = lightIntensity * lightAttenuation; // receive shadow
     half4 shade = _ShadeColor * SAMPLE_TEXTURE2D(_ShadeTexture, sampler_ShadeTexture, float4(mainUv, 0, 0));
     half4 lit = _Color * mainTex;
 half3 col = lerp(shade.rgb, lit.rgb, lightIntensity);
+col = LiveToonApplyMmdToonTexture(col, dotNL, lightAttenuation);
 half3 colWithoutTex = lerp(float3(0,0,0), float3(1,1,1), lightIntensity);
 // punctualDiffuse = lightIntensity;
 
@@ -1560,6 +1755,7 @@ half3 colWithoutTex = lerp(float3(0,0,0), float3(1,1,1), lightIntensity);
     half2 matcapUv = half2(dot(worldViewRight, worldNormal), dot(worldViewUp, worldNormal)) * 0.5 + 0.5;
     half3 matcapLighting = SAMPLE_TEXTURE2D(_SphereAdd, sampler_SphereAdd, matcapUv);
     col += lerp(matcapLighting, half3(0, 0, 0), i.isOutline);
+    col = LiveToonApplyMmdSphereCube(col, worldNormal, worldView, i.isOutline);
 #endif
 
                  // Emission
@@ -1684,6 +1880,7 @@ float alpha = RTD_TRAN_OPA_Sli;
     rimLift = 0.4;
     float3 rim_test_simple = pow(saturate(1.0 - dot(i.normalWS, normalize(i.viewDirWS)) + rimLift), max(rimPower, EPS_COL));
     float3 rimColor_mask = rim_test_simple;
+    PositionInputs posInput = LiveToonBuildPositionInputs(i);
     if (_DirectionalLightCount > 0)
     {
         for (int j = 0; j < _DirectionalLightCount; j++)
@@ -1699,7 +1896,7 @@ float alpha = RTD_TRAN_OPA_Sli;
     else if (_FallbackLightIntensity > 0)
     {
         DirectionalLightData fallbackDirectionalLightData = (DirectionalLightData)0;
-        bool hasPunctualFallback = TryBuildPunctualFallbackDirectionalLight(i, fallbackDirectionalLightData);
+        bool hasPunctualFallback = TryBuildPunctualFallbackDirectionalLight(i, posInput, fallbackDirectionalLightData);
         if (!hasPunctualFallback)
         {
             float3 fallbackLightDir = normalize(normalize(i.viewDirWS) + float3(0.0, 0.25, 0.0));
@@ -1731,6 +1928,30 @@ float alpha = RTD_TRAN_OPA_Sli;
         
     }
     // isFaceなら、rimCOlorMaskを0にする
+#if defined(SHADEROPTIONS_AREA_LIGHTS) && SHADEROPTIONS_AREA_LIGHTS
+    uint areaLightStart;
+    uint areaLightCount;
+#ifndef LIGHTLOOP_DISABLE_TILE_AND_CLUSTER
+    GetCountAndStart(posInput, LIGHTCATEGORY_AREA, areaLightStart, areaLightCount);
+#else
+    areaLightCount = _AreaLightCount;
+    areaLightStart = _PunctualLightCount;
+#endif
+
+    uint areaLightListOffset = 0;
+    while (areaLightListOffset < areaLightCount)
+    {
+        uint areaLightIndex = FetchIndex(areaLightStart, areaLightListOffset);
+        areaLightListOffset++;
+        if (areaLightIndex == -1)
+        {
+            break;
+        }
+
+        LightData areaLightData = FetchLight(areaLightIndex);
+        punctualDiffuse += LiveToonEvaluateAreaAdditionalDiffuse(i, posInput, areaLightData);
+    }
+#endif
     if(_isCharFace == 1) {
         rimColor_mask = float3(0,0,0);
     }
@@ -1760,8 +1981,6 @@ float alpha = RTD_TRAN_OPA_Sli;
     // result.rgb += punctualDiffuse;
 
     // result /= _DirectionalLightCount;
-uint2 tileIndex = uint2(i.pos.xy) / GetTileSize();
-                PositionInputs posInput = GetPositionInput(i.pos.xy, _ScreenSize.zw, i.pos.z, i.pos.w, i.posWorld.xyz, tileIndex);
                 float3 viewDirection = GetWorldSpaceNormalizeViewDir(i.posWorld);
                 float3 environmentNormalWS = normalize(i.normalWS);
                 float3 environmentBaseColor = mainTex.rgb * _Color.rgb;

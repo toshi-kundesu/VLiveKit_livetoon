@@ -29,6 +29,11 @@ namespace VLiveKit.LiveToon.Editor
         {
             return $"LiveToon material backup restore complete. Restored: {RestoredCount}, missing backups: {MissingCount}";
         }
+
+        public string ToLiveToonToMToonLog()
+        {
+            return $"LiveToon to MToon conversion complete. Created copies: {ConvertedCount}, assigned slots: {AssignedCount}, skipped: {SkippedCount}";
+        }
     }
 
     internal struct LiveToonOutlineMaterialState
@@ -53,12 +58,18 @@ namespace VLiveKit.LiveToon.Editor
     public sealed class ShaderConverterTool : EditorWindow
     {
         private const string DefaultShaderName = LiveToonShaderConverter.DefaultShaderName;
+        private const string MToonShaderName = LiveToonShaderConverter.MToonShaderName;
+        private const string MToon10ShaderName = LiveToonShaderConverter.MToon10ShaderName;
+        private const string MToon10BuiltinShaderName = LiveToonShaderConverter.MToon10BuiltinShaderName;
         private const string OfficialHdrpMmdShaderName = LiveToonShaderConverter.OfficialHdrpMmdShaderName;
         private const string BackupDirectoryName = "LiveToonMaterialBackups";
         private const string BackupSuffix = "_LiveToonBackup";
         private const string ConvertedDirectoryName = "LiveToonMaterials";
         private const string ConvertedSuffix = "_LiveToon";
         private const string GeneratedMaterialsDirectory = "Assets/VLiveKitGenerated/LiveToonMaterials";
+        private const string MToonConvertedDirectoryName = "MToonMaterials";
+        private const string MToonConvertedSuffix = "_MToon";
+        private const string MToonGeneratedMaterialsDirectory = "Assets/VLiveKitGenerated/MToonMaterials";
         private const string OfficialHdrpMmdConvertedDirectoryName = "OfficialHDRPMMDMaterials";
         private const string OfficialHdrpMmdConvertedSuffix = "_OfficialHDRPMMD";
         private const string OfficialHdrpMmdGeneratedMaterialsDirectory = "Assets/VLiveKitGenerated/OfficialHDRPMMDMaterials";
@@ -69,10 +80,18 @@ namespace VLiveKit.LiveToon.Editor
         private const string SourceMaterialRenderQueuePrefix = "VLiveKit.LiveToon.SourceMaterialRenderQueue=";
         private const string TransparentDepthPrepassName = "TransparentDepthPrepass";
         private const string TransparentDepthPostpassName = "TransparentDepthPostpass";
+        private const string KeyNormalMap = "_NORMALMAP";
+        private const string KeyAlphaTestOn = "_ALPHATEST_ON";
+        private const string KeyAlphaBlendOn = "_ALPHABLEND_ON";
+        private const string KeyAlphaPremultiplyOn = "_ALPHAPREMULTIPLY_ON";
         private const string KeyOutlineWidthWorld = "MTOON_OUTLINE_WIDTH_WORLD";
         private const string KeyOutlineWidthScreen = "MTOON_OUTLINE_WIDTH_SCREEN";
         private const string KeyOutlineColorFixed = "MTOON_OUTLINE_COLOR_FIXED";
         private const string KeyOutlineColorMixed = "MTOON_OUTLINE_COLOR_MIXED";
+        private const string KeyMToon10OutlineWorld = "_MTOON_OUTLINE_WORLD";
+        private const string KeyMToon10OutlineScreen = "_MTOON_OUTLINE_SCREEN";
+        private const string KeyMToon10EmissionMap = "_MTOON_EMISSIVEMAP";
+        private const string KeyMToon10RimMap = "_MTOON_RIMMAP";
         private const int GeometryQueue = 2000;
         private const int GeometryLastQueue = 2500;
         private const int LiveToonFogBaseQueue = 2225;
@@ -86,7 +105,8 @@ namespace VLiveKit.LiveToon.Editor
         private const float DefaultIndirectLightIntensity = 0.35f;
         private const float DefaultReflectionProbeIntensity = 0.25f;
         private const float DefaultReflectionProbeSmoothness = 0.35f;
-        private const float MmdOutlineWidthScale = 100f;
+        private const float MmdOutlineWidthScale = 1f / (0.003f * 1.5f);
+        private const float MmdEdgeScaleFallbackToEdgeSize = 0.35f;
         private const float MmdTransparentForwardOffsetFactor = -0.1f;
         private const float MmdTransparentForwardOffsetUnits = -1f;
         private const float MmdDefaultForwardOffsetFactor = 0f;
@@ -107,6 +127,7 @@ namespace VLiveKit.LiveToon.Editor
         private static readonly float BlendOne = (float)UnityEngine.Rendering.BlendMode.One;
         private static readonly float BlendSrcAlpha = (float)UnityEngine.Rendering.BlendMode.SrcAlpha;
         private static readonly float BlendOneMinusSrcAlpha = (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha;
+        private static readonly float ZTestLess = (float)UnityEngine.Rendering.CompareFunction.Less;
         private static readonly float ZTestLessEqual = (float)UnityEngine.Rendering.CompareFunction.LessEqual;
 
         private GameObject selectedObject;
@@ -134,21 +155,36 @@ namespace VLiveKit.LiveToon.Editor
         {
             EditorGUILayout.LabelField("Base Settings", EditorStyles.boldLabel);
             selectedObject = (GameObject)EditorGUILayout.ObjectField("Selected Object", selectedObject, typeof(GameObject), true);
-            shaderToUse = (Shader)EditorGUILayout.ObjectField("Shader To Use", shaderToUse, typeof(Shader), false);
             conversionSource = (LiveToonShaderConversionSource)EditorGUILayout.EnumPopup("Conversion Mode", conversionSource);
+            var requiresTargetShader = RequiresTargetShader(conversionSource);
+            if (requiresTargetShader)
+            {
+                shaderToUse = (Shader)EditorGUILayout.ObjectField("Shader To Use", shaderToUse, typeof(Shader), false);
+            }
+            else
+            {
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.ObjectField("MToon Shader", ResolveMToonShader(), typeof(Shader), false);
+                }
+            }
+
             using (new EditorGUI.DisabledScope(!UsesMmdTransparentFogOption(conversionSource)))
             {
                 mmdTransparentFogMode = (MmdTransparentFogMode)EditorGUILayout.EnumPopup("MMD Transparent Path", mmdTransparentFogMode);
             }
 
             EditorGUILayout.Space();
-            createMaterialBackups = EditorGUILayout.ToggleLeft("Also create legacy backup copies", createMaterialBackups);
-            disableOutlineOnConvert = EditorGUILayout.ToggleLeft("Disable outline after converting", disableOutlineOnConvert);
+            using (new EditorGUI.DisabledScope(!requiresTargetShader))
+            {
+                createMaterialBackups = EditorGUILayout.ToggleLeft("Also create legacy backup copies", createMaterialBackups);
+                disableOutlineOnConvert = EditorGUILayout.ToggleLeft("Disable outline after converting", disableOutlineOnConvert);
+            }
 
             EditorGUILayout.Space();
-            using (new EditorGUI.DisabledScope(selectedObject == null || shaderToUse == null))
+            using (new EditorGUI.DisabledScope(selectedObject == null || (requiresTargetShader && shaderToUse == null)))
             {
-                if (GUILayout.Button("Convert And Assign Material Copies"))
+                if (GUILayout.Button(GetConvertButtonLabel(conversionSource)))
                 {
                     ConvertShadersForSelectedModel();
                 }
@@ -176,13 +212,20 @@ namespace VLiveKit.LiveToon.Editor
                 return;
             }
 
-            if (shaderToUse == null)
+            if (RequiresTargetShader(conversionSource) && shaderToUse == null)
             {
                 ShowNotification(new GUIContent("Select a target shader first."));
                 return;
             }
 
             var result = ConvertShadersForObject(selectedObject, shaderToUse, createMaterialBackups, disableOutlineOnConvert, conversionSource, mmdTransparentFogMode);
+            if (conversionSource == LiveToonShaderConversionSource.LiveToonToMToon)
+            {
+                ShowNotification(new GUIContent($"Created MToon {result.ConvertedCount}, assigned {result.AssignedCount}"));
+                Debug.Log(result.ToLiveToonToMToonLog());
+                return;
+            }
+
             ShowNotification(new GUIContent($"Converted {result.ConvertedCount}, assigned {result.AssignedCount}"));
             Debug.Log(result.ToConversionLog());
         }
@@ -276,7 +319,9 @@ namespace VLiveKit.LiveToon.Editor
                         continue;
                     }
 
-                    var originalForConvertedCopy = FindOriginalMaterialForConvertedCopy(materialInSlot);
+                    var originalForConvertedCopy = conversionSource == LiveToonShaderConversionSource.LiveToonToMToon
+                        ? null
+                        : FindOriginalMaterialForConvertedCopy(materialInSlot);
                     var sourceMaterial = originalForConvertedCopy != null ? originalForConvertedCopy : materialInSlot;
 
                     if (!conversionMap.TryGetValue(sourceMaterial, out var convertedMaterial))
@@ -412,12 +457,24 @@ namespace VLiveKit.LiveToon.Editor
 
         private static Shader ResolveTargetShader(Shader targetShader, LiveToonShaderConversionSource conversionSource)
         {
+            if (conversionSource == LiveToonShaderConversionSource.LiveToonToMToon)
+            {
+                return ResolveMToonShader();
+            }
+
             if (conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD)
             {
                 return Shader.Find(OfficialHdrpMmdShaderName);
             }
 
             return targetShader;
+        }
+
+        private static Shader ResolveMToonShader()
+        {
+            return Shader.Find(MToonShaderName)
+                ?? Shader.Find(MToon10ShaderName)
+                ?? Shader.Find(MToon10BuiltinShaderName);
         }
 
         private static void ConvertMaterial(
@@ -428,6 +485,9 @@ namespace VLiveKit.LiveToon.Editor
         {
             switch (conversionSource)
             {
+                case LiveToonShaderConversionSource.LiveToonToMToon:
+                    ConvertMaterialFromLiveToonToMToon(material, targetShader);
+                    break;
                 case LiveToonShaderConversionSource.MMD4Mecanim:
                     ConvertMaterialFromMmd4Mecanim(material, targetShader, mmdTransparentFogMode);
                     break;
@@ -467,10 +527,103 @@ namespace VLiveKit.LiveToon.Editor
 
             ApplyRenderModeState(material, blendMode);
             ApplyMToonSpecularState(material);
+            ResetMmdTextureEffectState(material);
             RestoreOutlineProperties(material, outlineState);
             ApplyOutlineModeState(material);
             ApplyEnvironmentLightingDefaults(material);
             LiveToonDefaultAssets.EnsureDefaultJitterTexture(material);
+        }
+
+        private static void ConvertMaterialFromLiveToonToMToon(Material material, Shader targetShader)
+        {
+            var blendMode = Mathf.RoundToInt(GetFloat(material, "_BlendMode", 0f));
+            var color = GetColor(material, "_Color", Color.white);
+            var shadeColor = GetColor(material, "_ShadeColor", Color.white);
+            var mainTexture = GetTexture(material, "_MainTex");
+            var shadeTexture = GetTexture(material, "_ShadeTexture") ?? mainTexture;
+            var bumpMap = GetTexture(material, "_BumpMap");
+            var bumpScale = GetFloat(material, "_BumpScale", 1f);
+            var receiveShadowRate = GetFloat(material, "_ReceiveShadowRate", 1f);
+            var receiveShadowTexture = GetTexture(material, "_ReceiveShadowTexture");
+            var shadingGradeRate = GetFloat(material, "_ShadingGradeRate", 1f);
+            var shadingGradeTexture = GetTexture(material, "_ShadingGradeTexture");
+            var shadeShift = GetFloat(material, "_ShadeShift", 0f);
+            var shadeToony = GetFloat(material, "_ShadeToony", 0.9f);
+            var lightColorAttenuation = GetFloat(material, "_LightColorAttenuation", 0f);
+            var indirectLightIntensity = GetFloat(material, "_IndirectLightIntensity", 0.1f);
+            var rimColor = GetColor(material, "_RimColor", Color.black);
+            var rimTexture = GetTexture(material, "_RimTexture");
+            var rimLightingMix = GetFloat(material, "_RimLightingMix", 0f);
+            var rimFresnelPower = GetFloat(material, "_RimFresnelPower", 1f);
+            var rimLift = GetFloat(material, "_RimLift", 0f);
+            var sphereAdd = GetTexture(material, "_SphereAdd");
+            var emissionColor = GetColor(material, "_EmissionColor", Color.black);
+            var emissionMap = GetTexture(material, "_EmissionMap");
+            var uvMask = GetTexture(material, "_UvAnimMaskTexture");
+            var uvScrollX = GetFloat(material, "_UvAnimScrollX", 0f);
+            var uvScrollY = GetFloat(material, "_UvAnimScrollY", 0f);
+            var uvRotation = GetFloat(material, "_UvAnimRotation", 0f);
+            var cutoff = GetFloat(material, "_Cutoff", 0.5f);
+            var cullMode = GetFloat(material, "_CullMode", 2f);
+            var outlineState = CaptureOutlineState(material);
+            var isMToon10 = IsMToon10Shader(targetShader);
+
+            material.shader = targetShader;
+
+            SetColorIfPresent(material, "_Color", color);
+            SetColorIfPresent(material, "_ShadeColor", shadeColor);
+            SetTextureIfPresent(material, "_MainTex", mainTexture);
+            SetTextureIfPresent(material, "_ShadeTexture", shadeTexture);
+            SetFloatIfPresent(material, "_BumpScale", bumpScale);
+            SetTextureIfPresent(material, "_BumpMap", bumpMap);
+            SetFloatIfPresent(material, "_ReceiveShadowRate", receiveShadowRate);
+            SetTextureIfPresent(material, "_ReceiveShadowTexture", receiveShadowTexture);
+            SetFloatIfPresent(material, "_ShadingGradeRate", shadingGradeRate);
+            SetTextureIfPresent(material, "_ShadingGradeTexture", shadingGradeTexture);
+            SetFloatIfPresent(material, "_ShadeShift", shadeShift);
+            SetFloatIfPresent(material, "_ShadeToony", shadeToony);
+            SetFloatIfPresent(material, "_LightColorAttenuation", lightColorAttenuation);
+            SetFloatIfPresent(material, "_IndirectLightIntensity", indirectLightIntensity);
+            SetColorIfPresent(material, "_RimColor", rimColor);
+            SetTextureIfPresent(material, "_RimTexture", rimTexture);
+            SetFloatIfPresent(material, "_RimLightingMix", rimLightingMix);
+            SetFloatIfPresent(material, "_RimFresnelPower", rimFresnelPower);
+            SetFloatIfPresent(material, "_RimLift", rimLift);
+            SetTextureIfPresent(material, "_SphereAdd", sphereAdd);
+            SetColorIfPresent(material, "_EmissionColor", emissionColor);
+            SetTextureIfPresent(material, "_EmissionMap", emissionMap);
+            SetTextureIfPresent(material, "_UvAnimMaskTexture", uvMask);
+            SetFloatIfPresent(material, "_UvAnimScrollX", uvScrollX);
+            SetFloatIfPresent(material, "_UvAnimScrollY", uvScrollY);
+            SetFloatIfPresent(material, "_UvAnimRotation", uvRotation);
+            SetFloatIfPresent(material, "_Cutoff", cutoff);
+            SetFloatIfPresent(material, "_CullMode", cullMode);
+            RestoreOutlineProperties(material, outlineState);
+
+            if (isMToon10)
+            {
+                ApplyMToon10CompatibilityState(
+                    material,
+                    blendMode,
+                    cullMode,
+                    shadeTexture,
+                    shadeShift,
+                    shadeToony,
+                    indirectLightIntensity,
+                    rimTexture,
+                    sphereAdd,
+                    emissionMap,
+                    uvMask,
+                    uvScrollX,
+                    uvScrollY,
+                    uvRotation,
+                    outlineState,
+                    bumpMap);
+            }
+            else
+            {
+                ApplyClassicMToonCompatibilityState(material, blendMode, cullMode, outlineState, bumpMap);
+            }
         }
 
         private static void ConvertMaterialFromMmd4Mecanim(
@@ -484,8 +637,13 @@ namespace VLiveKit.LiveToon.Editor
             var usesMmdTransparentShader = IsMmdTransparentShader(sourceShaderName);
             var color = GetMmdBaseColor(material);
             var mainTexture = GetMmdMainTexture(material);
+            var toonTexture = GetTexture(material, "_ToonTex");
+            var shadowLum = GetFloat(material, "_ShadowLum", 1.5f);
+            var toonTone = GetVector(material, "_ToonTone", new Vector4(1f, 0.5f, 0.5f, 0f));
             var shadeColor = GetMmdShadeColor(material, color);
             var sphereAddTexture = GetTexture(material, "_SphereAdd");
+            var sphereCubeTexture = GetTexture(material, "_SphereCube");
+            var sphereMode = GetMmdSphereMode(material, sphereCubeTexture);
             var outlineState = CaptureMmdOutlineState(material, sourceShaderName, allowPropertyOnlyOutline: false);
             var usesMmdOutline = outlineState.WidthMode > 0.5f;
             var cullMode = GetMmdCullMode(sourceShaderName);
@@ -502,6 +660,8 @@ namespace VLiveKit.LiveToon.Editor
             SetTextureIfPresent(material, "_MainTex", mainTexture);
             SetTextureIfPresent(material, "_ShadeTexture", mainTexture);
             SetTextureIfPresent(material, "_SphereAdd", sphereAddTexture is Texture2D ? sphereAddTexture : null);
+            ApplyMmdToonTextureState(material, toonTexture, shadowLum, toonTone);
+            ApplyMmdSphereCubeState(material, sphereCubeTexture, sphereMode);
             ApplyMmdEmission(material, emissionMap, emissionColor);
 
             SetFloatIfPresent(material, "_BlendMode", blendMode);
@@ -638,6 +798,54 @@ namespace VLiveKit.LiveToon.Editor
         {
             var mainTexture = GetTexture(material, "_MainTex");
             return mainTexture != null ? mainTexture : GetTexture(material, "_BaseColorMap");
+        }
+
+        private static float GetMmdSphereMode(Material material, Texture sphereCubeTexture)
+        {
+            if (!(sphereCubeTexture is Cubemap))
+            {
+                return 0f;
+            }
+
+            if (material.IsKeywordEnabled("SPHEREMAP_MUL"))
+            {
+                return 2f;
+            }
+
+            if (material.IsKeywordEnabled("SPHEREMAP_ADD"))
+            {
+                return 1f;
+            }
+
+            return 1f;
+        }
+
+        private static void ApplyMmdToonTextureState(Material material, Texture toonTexture, float shadowLum, Vector4 toonTone)
+        {
+            var toonTexture2D = toonTexture as Texture2D;
+            SetTextureIfPresent(material, "_MmdToonTex", toonTexture2D);
+            SetFloatIfPresent(material, "_MmdToonTexIntensity", toonTexture2D != null ? 1f : 0f);
+            SetFloatIfPresent(material, "_MmdShadowLum", shadowLum);
+            SetVectorIfPresent(material, "_MmdToonTone", toonTone);
+        }
+
+        private static void ApplyMmdSphereCubeState(Material material, Texture sphereCubeTexture, float sphereMode)
+        {
+            var sphereCube = sphereCubeTexture as Cubemap;
+            SetTextureIfPresent(material, "_MmdSphereCube", sphereCube);
+            SetFloatIfPresent(material, "_MmdSphereMode", sphereCube != null ? sphereMode : 0f);
+            SetFloatIfPresent(material, "_MmdSphereIntensity", 1f);
+        }
+
+        private static void ResetMmdTextureEffectState(Material material)
+        {
+            SetTextureIfPresent(material, "_MmdToonTex", null);
+            SetFloatIfPresent(material, "_MmdToonTexIntensity", 0f);
+            SetFloatIfPresent(material, "_MmdShadowLum", 1.5f);
+            SetVectorIfPresent(material, "_MmdToonTone", new Vector4(1f, 0.5f, 0.5f, 0f));
+            SetTextureIfPresent(material, "_MmdSphereCube", null);
+            SetFloatIfPresent(material, "_MmdSphereMode", 0f);
+            SetFloatIfPresent(material, "_MmdSphereIntensity", 1f);
         }
 
         private static Texture GetMmdEmissionMap(Material material)
@@ -991,6 +1199,13 @@ namespace VLiveKit.LiveToon.Editor
             // MMD4Mecanim conversion: MMDLit transparent/edge passes use ColorMask RGB, which avoids writing transparent silhouettes into HDRP's alpha buffer.
             SetFloatIfPresent(material, "_MmdForwardColorMask", usesMmdTransparentShader ? MmdColorMaskRgb : MmdColorMaskRgba);
             SetFloatIfPresent(material, "_MmdOutlineColorMask", usesMmdOutline ? MmdColorMaskRgb : MmdColorMaskRgba);
+            // MMD4Mecanim Edge pass uses alpha blend, depth write, ZTest Less, and RGB-only writes.
+            SetOutlineRenderStateFloats(
+                material,
+                usesMmdOutline ? BlendSrcAlpha : GetFloat(material, "_SrcBlend", BlendOne),
+                usesMmdOutline ? BlendOneMinusSrcAlpha : GetFloat(material, "_DstBlend", BlendZero),
+                usesMmdOutline ? 1f : GetFloat(material, "_ZWrite", 1f),
+                usesMmdOutline ? ZTestLess : ZTestLessEqual);
         }
 
         private static Color GetMmdShadeColor(Material material, Color litColor)
@@ -1008,14 +1223,16 @@ namespace VLiveKit.LiveToon.Editor
             bool allowPropertyOnlyOutline)
         {
             var edgeSize = GetFloat(material, "_EdgeSize", 0f);
+            var edgeScale = GetFloat(material, "_EdgeScale", 0f);
+            var effectiveEdgeSize = edgeSize > 0f ? edgeSize : Mathf.Max(0f, edgeScale * MmdEdgeScaleFallbackToEdgeSize);
             var edgeColor = GetColor(material, "_EdgeColor", Color.black);
-            var usesOutline = (allowPropertyOnlyOutline || UsesMmdOutline(sourceShaderName)) && edgeSize > 0f && edgeColor.a > 0.001f;
+            var usesOutline = (allowPropertyOnlyOutline || UsesMmdOutline(sourceShaderName)) && effectiveEdgeSize > 0f && edgeColor.a > 0.001f;
 
             return new LiveToonOutlineMaterialState
             {
                 WidthMode = usesOutline ? 1f : 0f,
                 ColorMode = 0f,
-                Width = usesOutline ? Mathf.Clamp(edgeSize * MmdOutlineWidthScale, 0.01f, 1f) : 0f,
+                Width = usesOutline ? Mathf.Clamp(effectiveEdgeSize * MmdOutlineWidthScale, 0.01f, 1f) : 0f,
                 ScaledMaxDistance = 1f,
                 LightingMix = 0f,
                 CullMode = 1f,
@@ -1034,10 +1251,29 @@ namespace VLiveKit.LiveToon.Editor
             return conversionSource == LiveToonShaderConversionSource.MMD4Mecanim;
         }
 
+        private static bool RequiresTargetShader(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource != LiveToonShaderConversionSource.LiveToonToMToon;
+        }
+
+        private static string GetConvertButtonLabel(LiveToonShaderConversionSource conversionSource)
+        {
+            return conversionSource == LiveToonShaderConversionSource.LiveToonToMToon
+                ? "Create And Assign MToon Copies"
+                : "Convert And Assign Material Copies";
+        }
+
         private static bool ShaderNameContains(string shaderName, string token)
         {
             return !string.IsNullOrEmpty(shaderName)
                 && shaderName.IndexOf(token, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsMToon10Shader(Shader shader)
+        {
+            return shader != null
+                && (string.Equals(shader.name, MToon10ShaderName, StringComparison.Ordinal)
+                    || string.Equals(shader.name, MToon10BuiltinShaderName, StringComparison.Ordinal));
         }
 
         private static bool IsMmd4MecanimShader(string shaderName)
@@ -1110,6 +1346,7 @@ namespace VLiveKit.LiveToon.Editor
 
         private static void ApplyMmdSpecularState(Material material, LiveToonSpecularMaterialState specularState)
         {
+            // MMD4Mecanim conversion: feed the same source specular into hair anisotropy and the MMD-like Blinn-Phong path.
             SetColorIfPresent(material, "_SpecColor", specularState.Color);
             SetColorIfPresent(material, "_MmdSpecularColor", specularState.Color);
             SetFloatIfPresent(material, "_Intensity", specularState.Intensity);
@@ -1224,6 +1461,15 @@ namespace VLiveKit.LiveToon.Editor
             SetFloatIfPresent(material, "_DstBlend", dstBlend);
             SetFloatIfPresent(material, "_ZWrite", zWrite);
             SetFloatIfPresent(material, "_AlphaToMask", alphaToMask);
+            SetOutlineRenderStateFloats(material, srcBlend, dstBlend, zWrite, ZTestLessEqual);
+        }
+
+        private static void SetOutlineRenderStateFloats(Material material, float srcBlend, float dstBlend, float zWrite, float zTest)
+        {
+            SetFloatIfPresent(material, "_OutlineSrcBlend", srcBlend);
+            SetFloatIfPresent(material, "_OutlineDstBlend", dstBlend);
+            SetFloatIfPresent(material, "_OutlineZWrite", zWrite);
+            SetFloatIfPresent(material, "_OutlineZTest", zTest);
         }
 
         private static void SetTransparentDepthPasses(Material material, bool enabled)
@@ -1232,6 +1478,172 @@ namespace VLiveKit.LiveToon.Editor
             material.SetShaderPassEnabled(TransparentDepthPostpassName, enabled);
             SetFloatIfPresent(material, "_TransparentDepthPrepassEnable", enabled ? 1f : 0f);
             SetFloatIfPresent(material, "_TransparentDepthPostpassEnable", enabled ? 1f : 0f);
+        }
+
+        private static void ApplyClassicMToonCompatibilityState(
+            Material material,
+            int blendMode,
+            float cullMode,
+            LiveToonOutlineMaterialState outlineState,
+            Texture bumpMap)
+        {
+            SetFloatIfPresent(material, "_BlendMode", blendMode);
+            SetFloatIfPresent(material, "_CullMode", cullMode);
+            SetFloatIfPresent(material, "_OutlineCullMode", outlineState.CullMode);
+            ApplyClassicMToonRenderModeState(material, blendMode);
+            ApplyClassicMToonOutlineModeState(material, outlineState);
+            SetKeyword(material, KeyNormalMap, bumpMap != null);
+        }
+
+        private static void ApplyClassicMToonRenderModeState(Material material, int blendMode)
+        {
+            switch (blendMode)
+            {
+                case 0:
+                    material.SetOverrideTag("RenderType", "Opaque");
+                    SetRenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 0f);
+                    SetKeyword(material, KeyAlphaTestOn, false);
+                    SetKeyword(material, KeyAlphaBlendOn, false);
+                    SetKeyword(material, KeyAlphaPremultiplyOn, false);
+                    material.renderQueue = -1;
+                    break;
+                case 1:
+                    material.SetOverrideTag("RenderType", "TransparentCutout");
+                    SetRenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 1f);
+                    SetKeyword(material, KeyAlphaTestOn, true);
+                    SetKeyword(material, KeyAlphaBlendOn, false);
+                    SetKeyword(material, KeyAlphaPremultiplyOn, false);
+                    material.renderQueue = AlphaTestQueue;
+                    break;
+                case 3:
+                    material.SetOverrideTag("RenderType", "Transparent");
+                    SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 1f, alphaToMask: 0f);
+                    SetKeyword(material, KeyAlphaTestOn, false);
+                    SetKeyword(material, KeyAlphaBlendOn, true);
+                    SetKeyword(material, KeyAlphaPremultiplyOn, false);
+                    material.renderQueue = TransparentWithZWriteQueue;
+                    break;
+                default:
+                    material.SetOverrideTag("RenderType", "Transparent");
+                    SetRenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 0f, alphaToMask: 0f);
+                    SetKeyword(material, KeyAlphaTestOn, false);
+                    SetKeyword(material, KeyAlphaBlendOn, true);
+                    SetKeyword(material, KeyAlphaPremultiplyOn, false);
+                    material.renderQueue = TransparentQueue;
+                    break;
+            }
+        }
+
+        private static void ApplyClassicMToonOutlineModeState(Material material, LiveToonOutlineMaterialState outlineState)
+        {
+            var outlineWidthMode = Mathf.RoundToInt(outlineState.WidthMode);
+            var outlineColorMode = Mathf.RoundToInt(outlineState.ColorMode);
+            var usesWorldWidth = outlineWidthMode == 1;
+            var usesScreenWidth = outlineWidthMode == 2;
+            var usesOutline = usesWorldWidth || usesScreenWidth;
+            SetFloatIfPresent(material, "_OutlineWidthMode", outlineWidthMode);
+            SetFloatIfPresent(material, "_OutlineColorMode", outlineColorMode);
+            SetKeyword(material, KeyOutlineWidthWorld, usesWorldWidth);
+            SetKeyword(material, KeyOutlineWidthScreen, usesScreenWidth);
+            SetKeyword(material, KeyOutlineColorFixed, usesOutline && outlineColorMode == 0);
+            SetKeyword(material, KeyOutlineColorMixed, usesOutline && outlineColorMode == 1);
+        }
+
+        private static void ApplyMToon10CompatibilityState(
+            Material material,
+            int blendMode,
+            float cullMode,
+            Texture shadeTexture,
+            float shadeShift,
+            float shadeToony,
+            float indirectLightIntensity,
+            Texture rimTexture,
+            Texture sphereAdd,
+            Texture emissionMap,
+            Texture uvMask,
+            float uvScrollX,
+            float uvScrollY,
+            float uvRotation,
+            LiveToonOutlineMaterialState outlineState,
+            Texture bumpMap)
+        {
+            SetTextureIfPresent(material, "_ShadeTex", shadeTexture);
+            SetFloatIfPresent(material, "_ShadingShiftFactor", shadeShift);
+            SetFloatIfPresent(material, "_ShadingToonyFactor", shadeToony);
+            SetFloatIfPresent(material, "_GiEqualization", Mathf.Clamp01(1f - indirectLightIntensity));
+            SetTextureIfPresent(material, "_RimTex", rimTexture);
+            SetTextureIfPresent(material, "_MatcapTex", sphereAdd);
+            SetColorIfPresent(material, "_MatcapColor", sphereAdd != null ? Color.white : Color.black);
+            SetTextureIfPresent(material, "_OutlineWidthTex", outlineState.WidthTexture);
+            SetTextureIfPresent(material, "_UvAnimMaskTex", uvMask);
+            SetFloatIfPresent(material, "_UvAnimScrollXSpeed", uvScrollX);
+            SetFloatIfPresent(material, "_UvAnimScrollYSpeed", uvScrollY);
+            SetFloatIfPresent(material, "_UvAnimRotationSpeed", uvRotation);
+            SetFloatIfPresent(material, "_M_CullMode", cullMode);
+            SetFloatIfPresent(material, "_DoubleSided", Mathf.RoundToInt(cullMode) == 0 ? 1f : 0f);
+            ApplyMToon10RenderModeState(material, blendMode);
+            ApplyMToon10OutlineModeState(material, outlineState);
+            SetKeyword(material, KeyNormalMap, bumpMap != null);
+            SetKeyword(material, KeyMToon10EmissionMap, emissionMap != null);
+            SetKeyword(material, KeyMToon10RimMap, rimTexture != null);
+        }
+
+        private static void ApplyMToon10RenderModeState(Material material, int blendMode)
+        {
+            var isCutout = blendMode == 1;
+            var isTransparent = blendMode == 2 || blendMode == 3;
+            SetFloatIfPresent(material, "_AlphaMode", isCutout ? 1f : isTransparent ? 2f : 0f);
+            SetFloatIfPresent(material, "_TransparentWithZWrite", blendMode == 3 ? 1f : 0f);
+
+            if (isCutout)
+            {
+                material.SetOverrideTag("RenderType", "TransparentCutout");
+                SetMToon10RenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 1f);
+                material.renderQueue = AlphaTestQueue;
+            }
+            else if (blendMode == 3)
+            {
+                material.SetOverrideTag("RenderType", "Transparent");
+                SetMToon10RenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 1f, alphaToMask: 0f);
+                material.renderQueue = TransparentWithZWriteQueue;
+            }
+            else if (isTransparent)
+            {
+                material.SetOverrideTag("RenderType", "Transparent");
+                SetMToon10RenderStateFloats(material, BlendSrcAlpha, BlendOneMinusSrcAlpha, zWrite: 0f, alphaToMask: 0f);
+                material.renderQueue = TransparentQueue;
+            }
+            else
+            {
+                material.SetOverrideTag("RenderType", "Opaque");
+                SetMToon10RenderStateFloats(material, BlendOne, BlendZero, zWrite: 1f, alphaToMask: 0f);
+                material.renderQueue = -1;
+            }
+
+            SetKeyword(material, KeyAlphaTestOn, isCutout);
+            SetKeyword(material, KeyAlphaBlendOn, isTransparent);
+            SetKeyword(material, KeyAlphaPremultiplyOn, false);
+        }
+
+        private static void SetMToon10RenderStateFloats(Material material, float srcBlend, float dstBlend, float zWrite, float alphaToMask)
+        {
+            SetFloatIfPresent(material, "_M_SrcBlend", srcBlend);
+            SetFloatIfPresent(material, "_M_DstBlend", dstBlend);
+            SetFloatIfPresent(material, "_M_ZWrite", zWrite);
+            SetFloatIfPresent(material, "_M_AlphaToMask", alphaToMask);
+        }
+
+        private static void ApplyMToon10OutlineModeState(Material material, LiveToonOutlineMaterialState outlineState)
+        {
+            var outlineWidthMode = Mathf.RoundToInt(outlineState.WidthMode);
+            var usesWorldWidth = outlineWidthMode == 1;
+            var usesScreenWidth = outlineWidthMode == 2;
+            var usesOutline = usesWorldWidth || usesScreenWidth;
+            var outlineWidth = usesOutline ? Mathf.Clamp(outlineState.Width * 0.05f, 0.0001f, 0.05f) : 0f;
+            SetFloatIfPresent(material, "_OutlineWidthMode", usesOutline ? outlineWidthMode : 0f);
+            SetFloatIfPresent(material, "_OutlineWidth", outlineWidth);
+            SetKeyword(material, KeyMToon10OutlineWorld, usesWorldWidth);
+            SetKeyword(material, KeyMToon10OutlineScreen, usesScreenWidth);
         }
 
         private static void DisableOutline(Material material)
@@ -1609,33 +2021,51 @@ namespace VLiveKit.LiveToon.Editor
 
         private static string GetConvertedDirectoryName(LiveToonShaderConversionSource conversionSource)
         {
-            return conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
-                ? OfficialHdrpMmdConvertedDirectoryName
-                : ConvertedDirectoryName;
+            switch (conversionSource)
+            {
+                case LiveToonShaderConversionSource.LiveToonToMToon:
+                    return MToonConvertedDirectoryName;
+                case LiveToonShaderConversionSource.OfficialHDRPMMD:
+                    return OfficialHdrpMmdConvertedDirectoryName;
+                default:
+                    return ConvertedDirectoryName;
+            }
         }
 
         private static string GetConvertedSuffix(LiveToonShaderConversionSource conversionSource)
         {
-            return conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
-                ? OfficialHdrpMmdConvertedSuffix
-                : ConvertedSuffix;
+            switch (conversionSource)
+            {
+                case LiveToonShaderConversionSource.LiveToonToMToon:
+                    return MToonConvertedSuffix;
+                case LiveToonShaderConversionSource.OfficialHDRPMMD:
+                    return OfficialHdrpMmdConvertedSuffix;
+                default:
+                    return ConvertedSuffix;
+            }
         }
 
         private static string GetGeneratedMaterialsDirectory(LiveToonShaderConversionSource conversionSource)
         {
-            return conversionSource == LiveToonShaderConversionSource.OfficialHDRPMMD
-                ? OfficialHdrpMmdGeneratedMaterialsDirectory
-                : GeneratedMaterialsDirectory;
+            switch (conversionSource)
+            {
+                case LiveToonShaderConversionSource.LiveToonToMToon:
+                    return MToonGeneratedMaterialsDirectory;
+                case LiveToonShaderConversionSource.OfficialHDRPMMD:
+                    return OfficialHdrpMmdGeneratedMaterialsDirectory;
+                default:
+                    return GeneratedMaterialsDirectory;
+            }
         }
 
         private static string[] GetConvertedSuffixes()
         {
-            return new[] { ConvertedSuffix, OfficialHdrpMmdConvertedSuffix };
+            return new[] { ConvertedSuffix, MToonConvertedSuffix, OfficialHdrpMmdConvertedSuffix };
         }
 
         private static int GetConvertedDirectoryMarkerIndex(string normalizedPath)
         {
-            foreach (var directoryName in new[] { ConvertedDirectoryName, OfficialHdrpMmdConvertedDirectoryName })
+            foreach (var directoryName in new[] { ConvertedDirectoryName, MToonConvertedDirectoryName, OfficialHdrpMmdConvertedDirectoryName })
             {
                 var marker = $"/{directoryName}/";
                 var markerIndex = normalizedPath.IndexOf(marker, StringComparison.OrdinalIgnoreCase);

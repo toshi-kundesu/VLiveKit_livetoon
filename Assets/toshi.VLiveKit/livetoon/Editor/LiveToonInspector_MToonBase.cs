@@ -90,6 +90,20 @@ namespace toshi.VLiveKit.livetoon.Editor
                 DrawProperty(materialEditor, properties, "_JitterTex");
                 DrawDefaultJitterTextureButton(materialEditor);
 
+                DrawSectionLabel("MMD Specular");
+                DrawProperty(materialEditor, properties, "_MmdSpecularColor");
+                DrawProperty(materialEditor, properties, "_MmdSpecularIntensity");
+                DrawProperty(materialEditor, properties, "_MmdSpecularPower");
+
+                DrawSectionLabel("MMD Texture Effects");
+                DrawProperty(materialEditor, properties, "_MmdToonTex");
+                DrawProperty(materialEditor, properties, "_MmdToonTexIntensity");
+                DrawProperty(materialEditor, properties, "_MmdShadowLum");
+                DrawProperty(materialEditor, properties, "_MmdToonTone");
+                DrawProperty(materialEditor, properties, "_MmdSphereCube");
+                DrawProperty(materialEditor, properties, "_MmdSphereMode");
+                DrawProperty(materialEditor, properties, "_MmdSphereIntensity");
+
                 DrawSectionLabel("Perspective");
                 DrawProperty(materialEditor, properties, "_LiveToonPerspectiveCorrectionIntensity");
                 DrawProperty(materialEditor, properties, "_LiveToonPerspectiveCorrectionCenterWS");
